@@ -37,7 +37,7 @@ flowchart TD
 
 | 阶段（Stage） | 职责与白话解释 | 核心算子 | 常用配置选项 |
 | :--- | :--- | :--- | :--- |
-| **1. 清洗 (Sanitize)** | 抹平换行、统一 Callout 为 GitHub 块引用、识别外部二进制附件并在文末留痕。 | `core/ast` | `features.extractAttachments` |
+| **1. 清洗与文本算子 (Sanitize)** | 抹平换行、统一 Callout 为 GitHub 块引用、识别外部二进制附件并在文末留痕；提供 `outdent` 模板去缩进、`renderMarkdownTable` 表格渲染、标量安全 Frontmatter 与 `appendUnderHeading` 章节追加。 | `core/ast` | `features.extractAttachments` |
 | **2. 门禁 (Gate)** | 处理前快速拦截：正文指纹未变立即 0-Token 退出，遇到人工锁 `lock: human` 绝不擅自覆盖。 | `core/hash`<br>`core/lint` | `gates.idempotency`<br>`gates.humanLock` |
 | **3. 提纯与对账 (Process)** | **主干对账（patch）**：新老章节 AST 对比，修改就地更新，已删章节打废弃警告；<br>**核心提炼（distill）**：抽取 IPO 结构与精选代码；<br>**直通（passThrough）**：保留清洗后原文。 | `core/patch`<br>`core/ast` | `compileMode: "patch" \| "distill" \| "passThrough"`<br>`deprecationNotice: boolean` |
 | **4. 索引与感知 (Index)** | 词项精确检索与章节级高精度向量索引。 | `core/sense`<br>`core/graph` | `BM25Engine`<br>`computeLateChunking`<br>`buildBacklinksGraph` |

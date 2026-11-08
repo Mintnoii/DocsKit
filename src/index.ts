@@ -30,6 +30,13 @@ export {
   updateOKFMetadata,
   buildOKFConceptCard,
   getMarkdownFiles,
+  outdent,
+  matterYamlEngine,
+  parseMarkdownSafely,
+  stringifyMarkdownSafely,
+  condenseTitle,
+  renderMarkdownTable,
+  appendUnderHeading,
   type ScanMarkdownFilesOptions,
   type MarkdownAttachment,
   type MarkdownNormalizeResult,
@@ -41,6 +48,8 @@ export {
   type CardAttachmentItem,
   type BuildOKFConceptCardOptions,
   type OKFConceptCardResult,
+  type ParsedMarkdownResult,
+  type MarkdownTableOptions,
 } from "./core/ast/index";
 
 export {
@@ -79,6 +88,24 @@ export {
   type RerankConfig,
 } from "./core/sense/index";
 
+
+export {
+  checkHumanLock,
+  lintVaultTopology,
+  auditVaultLifecycle,
+  auditDirectoryVault,
+  loadVaultCardNodes,
+  buildVaultTopologyGraph,
+  type VaultLintCardItem,
+  type BrokenLinkItem,
+  type SchemaViolationItem,
+  type VaultTopologyLintResult,
+  type LifecycleCardItem,
+  type StaleCandidateItem,
+  type VaultLifecycleAuditResult,
+  type VaultAuditOptions,
+  type VaultAuditReport,
+} from "./core/lint/index";
 
 export {
   extractWikiOutboundLinks,
