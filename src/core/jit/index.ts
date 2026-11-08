@@ -1,3 +1,5 @@
+import { outdent } from "../ast/markdown-utils";
+
 export interface JITCardItem {
   readonly title: string;
   readonly summary: string;
@@ -16,6 +18,7 @@ export interface JITFormatOptions {
 
 /**
  * 格式化为注入 Coding Agent (Claude Code / Cursor / Windsurf / IDE) 的标准紧凑上下文
+ * 纯声明式生成，告别命令式字符串拼接
  */
 export function formatAgentJITPrompt(
   query: string,
@@ -27,43 +30,75 @@ export function formatAgentJITPrompt(
 
   if (matches.length === 0) {
     return {
-      prompt: `> [!NOTE] ${vaultName} 架构感知透镜\n> 未检索到与 "${query}" 强相关的核心规范卡片。如涉及全新架构，请遵循团队常规编码规范。`,
+      prompt: outdent`
+        > [!NOTE] ${vaultName} 架构感知透镜
+        > 未检索到与 "${query}" 强相关的核心规范卡片。如涉及全新架构，请遵循团队常规编码规范。
+      `,
       topCardPaths: [],
     };
   }
 
-  let prompt = `<!-- ${vaultName} Architecture & Consensus Context (JIT Progressive Lens) -->\n`;
-  prompt += `> [!IMPORTANT] 核心架构与因果约束对账 (JIT 懒加载就绪)\n`;
-  prompt += `> 本地知识透镜已命中以下 ${matches.length} 项与当前任务强相关的唯一真理源卡片：\n\n`;
-
-  for (let i = 0; i < matches.length; i++) {
-    const m = matches[i];
+  const cardBlocks = matches.map((m, idx) => {
     topCardPaths.push(m.filePath);
     const normalizedPath = m.filePath.replaceAll("\\", "/");
 
-    prompt += `### ${i + 1}. 《${m.title}》\n`;
-    prompt += `- **因果摘要**: ${m.summary}\n`;
-    prompt += `- **物理指针**: \`file:///${normalizedPath}\`\n`;
+    const depLine =
+      m.dependencies && m.dependencies.length > 0
+        ? `- **🔗 1-Hop 强前置依赖**: ${m.dependencies
+            .map((d) => {
+              topCardPaths.push(d.filePath);
+              return `《${d.title}》(\`file:///${d.filePath.replaceAll("\\", "/")}\`)`;
+            })
+            .join("、")}`
+        : null;
 
-    if (m.dependencies && m.dependencies.length > 0) {
-      prompt += `- **🔗 1-Hop 强前置依赖**: ${m.dependencies.map((d) => `《${d.title}》(\`file:///${d.filePath.replaceAll("\\", "/")}\`)`).join("、")}\n`;
-      m.dependencies.forEach((d) => topCardPaths.push(d.filePath));
-    }
+    const backlinkLine =
+      m.dependents && m.dependents.length > 0
+        ? `- **⚓ 1-Hop 下游关联受影响卡片 (Backlinks)**: ${m.dependents
+            .map((d) => {
+              topCardPaths.push(d.filePath);
+              return `《${d.title}》(\`file:///${d.filePath.replaceAll("\\", "/")}\`)`;
+            })
+            .join("、")}`
+        : null;
 
-    if (m.dependents && m.dependents.length > 0) {
-      prompt += `- **⚓ 1-Hop 下游关联受影响卡片 (Backlinks)**: ${m.dependents.map((d) => `《${d.title}》(\`file:///${d.filePath.replaceAll("\\", "/")}\`)`).join("、")}\n`;
-      m.dependents.forEach((d) => topCardPaths.push(d.filePath));
-    }
+    const bodyBlock =
+      mode === "detailed" && m.content
+        ? outdent`
 
-    if (mode === "detailed" && m.content) {
-      prompt += `\n<card_contract_body>\n${m.content.trim()}\n</card_contract_body>\n`;
-    }
-    prompt += `\n`;
-  }
+            <card_contract_body>
+            ${m.content.trim()}
+            </card_contract_body>
+          `
+        : "";
 
-  prompt += `> [!TIP] Coding Agent 执行纪律：\n`;
-  prompt += `> 1. 上述卡片为公共架构资产与决策约束，**不可随意推翻**；\n`;
-  prompt += `> 2. 若当前修改涉及上述模块的边界或重构，**请主动发起 \`read_file\` 工具调用深入精读对应物理指针**，顺着 1-Hop 双链避免重构破坏。\n`;
+    const lines = [
+      `### ${idx + 1}. 《${m.title}》`,
+      `- **因果摘要**: ${m.summary}`,
+      `- **物理指针**: \`file:///${normalizedPath}\``,
+      depLine,
+      backlinkLine,
+    ].filter(Boolean);
+
+    return `${lines.join("\n")}${bodyBlock}`;
+  });
+
+  const tipRule2 =
+    mode === "compact"
+      ? "> 2. 若当前修改涉及上述模块的边界或重构，**请主动发起 `read_file` 工具调用深入精读对应物理指针**，顺着 1-Hop 双链避免重构破坏。"
+      : "> 2. 深度契约正文已载入上方，请严格对齐上述 IPO 契约与性能门禁编写代码。";
+
+  const prompt = outdent`
+    <!-- ${vaultName} Architecture & Consensus Context (JIT Progressive Lens) -->
+    > [!IMPORTANT] 核心架构与因果约束对账 (JIT 懒加载就绪)
+    > 本地知识透镜已命中以下 ${matches.length} 项与当前任务强相关的唯一真理源卡片：
+
+    ${cardBlocks.join("\n\n")}
+
+    > [!TIP] Coding Agent 执行纪律：
+    > 1. 上述卡片为公共架构资产与决策约束，**不可随意推翻**；
+    ${tipRule2}
+  `;
 
   return { prompt, topCardPaths: Array.from(new Set(topCardPaths)) };
 }
