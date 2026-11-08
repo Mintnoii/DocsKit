@@ -123,8 +123,8 @@ export function distillMarkdownContent(
 
   distilled += `> [!NOTE] 核心因果摘要\n> ${summary}\n\n`;
 
-  // 2. 第一节：概念核心定义与本质剖析 (通用基石)
-  distilled += `## 1. 概念核心定义与第一性原理\n\n`;
+  // 2. 第一节：核心定义与背景动机
+  distilled += `## 1. 概念核心定义与架构背景\n\n`;
   const contextSec = sections.find((s) => s.title.match(/(痛点|背景|为什么|原理|思考|挑战|定义|本质)/));
   if (contextSec) {
     distilled += `### 💡 ${contextSec.title}\n\n${contextSec.body}\n\n`;
@@ -132,9 +132,9 @@ export function distillMarkdownContent(
     distilled += `${sections[0].body}\n\n`;
   }
 
-  // 3. 第二节：根据 modeling 展开不同的核心架构与骨架
+  // 3. 第二节：核心架构契约与设计范式（根据 modeling 展开）
   if (modeling === "ipo") {
-    distilled += `## 2. 算子确定性 IPO 契约 (Operator Contract)\n\n`;
+    distilled += `## 2. 核心架构契约与设计范式 (IPO 算子)\n\n`;
     distilled += `| 环节 | 契约要素与流转标准 | 说明 |\n`;
     distilled += `| :--- | :--- | :--- |\n`;
     distilled += `| **输入原材料 (Input)** | 原始上下文、参数与前置依赖状态 | 具备确定性校验规则 |\n`;

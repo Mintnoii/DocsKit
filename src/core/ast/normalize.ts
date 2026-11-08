@@ -3,8 +3,9 @@ import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
 import { visit } from "unist-util-visit";
+import { selectAll } from "unist-util-select";
 import { extname } from "pathe";
-import type { Root, Table, Link } from "mdast";
+import type { Root, Link } from "mdast";
 
 export interface MarkdownAttachment {
   readonly name: string;
@@ -19,16 +20,20 @@ export interface NormalizeOptions {
   readonly transformLink?: (url: string, text: string) => string | null;
 }
 
+export interface MarkdownStructureStats {
+  readonly calloutsCount: number;
+  readonly tablesCount: number;
+  readonly mermaidCount: number;
+  readonly codeBlocksCount: number;
+  readonly attachmentsCount: number;
+  readonly linksTransformedCount: number;
+}
+
 export interface MarkdownNormalizeResult {
   readonly frontmatter: Readonly<Record<string, unknown>>;
   readonly cleanContent: string;
   readonly attachments: ReadonlyArray<MarkdownAttachment>;
-  readonly stats: {
-    readonly calloutsCount: number;
-    readonly tablesCount: number;
-    readonly attachmentsCount: number;
-    readonly linksTransformedCount: number;
-  };
+  readonly stats: MarkdownStructureStats;
 }
 
 const BINARY_EXTENSIONS = new Set([
@@ -38,8 +43,8 @@ const BINARY_EXTENSIONS = new Set([
 /**
  * 纯 AST 驱动的通用 Markdown 语法清洗与规范化器
  *
- * 核心设计（严格践行 dotagents 编码审美）：
- * 1. 彻底消灭天书级长正则，URL 解析直接采用 Web 标准 `URL` 原生 API；
+ * 核心审美规范：
+ * 1. 采用 `unist-util-select` 声明式 CSS 选择器统计图表与表格，杜绝手写天书正则；
  * 2. 节点识别全量走 MDAST 语法树访问者模式（Visitor），只对真实 `link` 节点操作，绝不误伤正文与代码块；
  * 3. 附件资产与站内指针在 AST 阶段准确定位，声明式构建表格；
  * 4. 保持 Markdown 源生格式纯净度，无多余转义。
@@ -61,18 +66,17 @@ export function normalizeMarkdownContent(
     mdastExtensions: [gfmFromMarkdown()],
   });
 
-  let tablesCount = 0;
+  // 3. 利用 unist-util-select 声明式统计文档核心结构指标 (零正则，工业级准确)
+  const tables = selectAll("table", tree);
+  const codeBlocks = selectAll("code", tree);
+  const mermaidBlocks = selectAll('code[lang="mermaid"]', tree);
+
   let linksTransformedCount = 0;
   const attachments: MarkdownAttachment[] = [];
   const linkReplacements: Array<{ readonly start: number; readonly end: number; readonly replacement: string }> = [];
 
-  // 3. 访问者模式遍历：准确定位链接与表格，零天书正则
+  // 4. 访问者模式遍历：准确定位链接，零天书正则
   visit(tree, (node) => {
-    if (node.type === "table") {
-      tablesCount++;
-      return;
-    }
-
     if (node.type !== "link" || !node.position) {
       return;
     }
@@ -111,19 +115,19 @@ export function normalizeMarkdownContent(
     }
   });
 
-  // 4. 按 AST 物理位置从后向前精确替换（避免位移，不损毁其它任何格式）
+  // 5. 按 AST 物理位置从后向前精确替换
   let cleanContent = preprocessedText;
   const sortedReplacements = [...linkReplacements].sort((a, b) => b.start - a.start);
   for (const rep of sortedReplacements) {
     cleanContent = `${cleanContent.slice(0, rep.start)}${rep.replacement}${cleanContent.slice(rep.end)}`;
   }
 
-  // 5. 若抽取到了附件，声明式构建标准资产附录表格追加文末
+  // 6. 若抽取到了附件，声明式构建标准资产附录表格追加文末
   if (extractAttachments && attachments.length > 0) {
     cleanContent += generateAttachmentsAppendix(attachments);
   }
 
-  // 6. 清除连续无意义空行
+  // 7. 清除连续无意义空行
   cleanContent = cleanContent.replace(/\n{3,}/g, "\n\n").trim();
 
   return {
@@ -132,7 +136,9 @@ export function normalizeMarkdownContent(
     attachments: Object.freeze(attachments),
     stats: {
       calloutsCount,
-      tablesCount,
+      tablesCount: tables.length,
+      mermaidCount: mermaidBlocks.length,
+      codeBlocksCount: codeBlocks.length,
       attachmentsCount: attachments.length,
       linksTransformedCount,
     },

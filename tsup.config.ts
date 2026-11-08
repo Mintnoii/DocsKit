@@ -8,6 +8,7 @@ export default defineConfig({
     "patch/index": "src/core/patch/index.ts",
     "lint/index": "src/core/lint/index.ts",
     "hash/index": "src/core/hash/index.ts",
+    "snapshot/index": "src/core/snapshot/index.ts",
     "pipeline/index": "src/pipeline/index.ts",
   },
   format: ["esm"],

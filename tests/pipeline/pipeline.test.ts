@@ -75,7 +75,7 @@ export function loop() {
     });
     assert.equal(resIpo.action, "DISTILLED");
     assert.ok(resIpo.content.includes("形态 A · 纯 IPO 算子模型"));
-    assert.ok(resIpo.content.includes("算子确定性 IPO 契约"));
+    assert.ok(resIpo.content.includes("核心架构契约与设计范式"));
     assert.equal(resIpo.frontmatter.modeling, "ipo");
 
     // 2. 测试 Decomposition 分解工序建模

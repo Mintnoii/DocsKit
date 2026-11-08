@@ -5,6 +5,10 @@ import {
   computeMarkdownBodyHash,
   checkContentIdempotency,
   normalizeMarkdownContent,
+  parseSnapshotMeta,
+  buildSnapshotPath,
+  isVersionNewer,
+  sanitizeFileName,
 } from "../src/index";
 
 describe("Cyberbrain Core Operators Test Suite", () => {
@@ -88,6 +92,62 @@ tags: [new]
       assert.ok(result.cleanContent.includes("📎 **[附件资产: 配置包.zip]**"));
       assert.ok(result.cleanContent.includes("### 📦 外部附件与关联资产清单"));
       assert.ok(result.cleanContent.includes("| 1 | `配置包.zip` | `.zip` | [原始下载链接](https://internal.storage.com/files/config.zip) |"));
+    });
+
+    it("应通过 unist-util-select 准确统计 Mermaid、代码块与表格", () => {
+      const raw = `
+## 1. 架构图解
+\`\`\`mermaid
+flowchart TD
+  A --> B
+\`\`\`
+
+\`\`\`ts
+const x = 1;
+\`\`\`
+
+| 参数 | 类型 |
+| :--- | :--- |
+| id | string |
+`;
+      const result = normalizeMarkdownContent(raw);
+      assert.equal(result.stats.mermaidCount, 1);
+      assert.equal(result.stats.codeBlocksCount, 2);
+      assert.equal(result.stats.tablesCount, 1);
+    });
+  });
+
+  describe("3. Snapshot Path & Version Resolver", () => {
+    it("parseSnapshotMeta 应声明式解构分类、标题与 revision", () => {
+      const meta1 = parseSnapshotMeta("_raw/frontend/WebGL渲染引擎-rev3.md");
+      assert.equal(meta1.category, "frontend");
+      assert.equal(meta1.title, "WebGL渲染引擎");
+      assert.equal(meta1.revision, 3);
+      assert.equal(meta1.safeFileName, "WebGL渲染引擎-rev3.md");
+
+      const meta2 = parseSnapshotMeta("snapshots/articles/深度学习通识.md");
+      assert.equal(meta2.category, "articles");
+      assert.equal(meta2.title, "深度学习通识");
+      assert.equal(meta2.revision, null);
+    });
+
+    it("buildSnapshotPath 应生成标准物理路径", () => {
+      const path = buildSnapshotPath({
+        category: "agent",
+        title: "Agent Loop 机制",
+        revision: 2,
+      });
+      assert.equal(path, "_raw/agent/Agent Loop 机制-rev2.md");
+    });
+
+    it("isVersionNewer 应支持整数 revision 与 SemVer 版本比对", () => {
+      assert.equal(isVersionNewer(3, 2), true);
+      assert.equal(isVersionNewer(2, 2), false);
+      assert.equal(isVersionNewer(1, 2), false);
+
+      assert.equal(isVersionNewer("1.2.0", "1.1.9"), true);
+      assert.equal(isVersionNewer("2.0.0", "2.0.0"), false);
+      assert.equal(isVersionNewer("v1.5.0", "1.4.0"), true);
     });
   });
 });
