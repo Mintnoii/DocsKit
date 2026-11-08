@@ -16,6 +16,8 @@ export * as pipeline from "./pipeline/index";
 export {
   computeContentHash,
   computeMarkdownBodyHash,
+  checkContentIdempotency,
+  type IdempotencyResult,
 } from "./core/hash/index";
 
 export {
@@ -23,12 +25,17 @@ export {
   parseMarkdownWithAST,
   distillMarkdownContent,
   appendCardAttachments,
+  createOKFMetadata,
   createOKFConceptMetadata,
+  updateOKFMetadata,
   buildOKFConceptCard,
+  getMarkdownFiles,
+  type ScanMarkdownFilesOptions,
   type MarkdownAttachment,
   type MarkdownNormalizeResult,
   type NormalizeOptions,
   type ParsedMarkdownAST,
+  type ParsedMarkdownSection,
   type ConceptModeling,
   type DistillOptions,
   type CardAttachmentItem,
@@ -47,6 +54,7 @@ export {
 export {
   BM25Engine,
   computeLateChunking,
+  locateTopSectionsWithLateChunking,
   rrfFuseScores,
   cleanTextForVector,
   buildNgramVocabulary,
@@ -56,11 +64,21 @@ export {
   createReranker,
   HttpReranker,
   LocalOnnxReranker,
+  rankDocumentsByNgramVector,
+  executeHybridRankPipeline,
+  type HybridSearchableDocument,
+  type HybridRankResult,
+  type HybridRankingPipelineOptions,
+  type LateChunkSectionSpan,
+  type LateChunkItem,
+  type LateChunkOutput,
+  type LocatedSectionResult,
   type Reranker,
   type RerankItem,
   type RerankResult,
   type RerankConfig,
 } from "./core/sense/index";
+
 
 export {
   extractWikiOutboundLinks,

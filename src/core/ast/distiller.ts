@@ -14,11 +14,20 @@ export interface DistillOptions {
   readonly summary?: string;
 }
 
+export interface ParsedMarkdownSection {
+  readonly title: string;
+  readonly anchor: string;
+  readonly body: string;
+  readonly depth: number;
+  readonly startOffset: number;
+  readonly endOffset: number;
+}
+
 export interface ParsedMarkdownAST {
   readonly codeBlocks: readonly string[];
   readonly tables: readonly string[];
   readonly summary: string;
-  readonly sections: ReadonlyArray<{ readonly title: string; readonly body: string; readonly depth: number }>;
+  readonly sections: readonly ParsedMarkdownSection[];
 }
 
 /**
@@ -62,17 +71,22 @@ export function parseMarkdownWithAST(rawContent: string, defaultTitle: string): 
   });
 
   // 根据 AST 标题节点位置精确切分章节
-  const sections = headings.map((h, i) => {
+  const sections: ParsedMarkdownSection[] = headings.map((h, i) => {
     const title = content
       .slice(h.position!.start.offset, h.position!.end.offset)
       .replace(/^#{2,3}\s+/, "")
       .trim();
-    const bodyStart = h.position!.end.offset;
-    const bodyEnd = headings[i + 1] ? headings[i + 1].position!.start.offset : content.length;
+    const anchor = "#" + title.toLowerCase().replace(/[\s\p{P}]+/gu, "-");
+    const startOffset = h.position!.start.offset ?? 0;
+    const bodyStart = h.position!.end.offset ?? 0;
+    const endOffset = headings[i + 1]?.position?.start.offset ?? content.length;
     return {
       title,
-      body: content.slice(bodyStart, bodyEnd).trim(),
+      anchor,
+      body: content.slice(bodyStart, endOffset).trim(),
       depth: h.depth,
+      startOffset,
+      endOffset,
     };
   });
 

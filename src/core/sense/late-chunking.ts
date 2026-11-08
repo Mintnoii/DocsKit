@@ -174,3 +174,79 @@ export async function computeLateChunking(
 
   return { docVector, chunks };
 }
+
+/**
+ * 余弦相似度点积纯函数 (归一化向量)
+ */
+function cosineSimilarityNormalized(vecA: number[], vecB: number[]): number {
+  if (vecA.length !== vecB.length) return 0;
+  let dot = 0;
+  for (let i = 0; i < vecA.length; i++) {
+    dot += vecA[i] * vecB[i];
+  }
+  return dot;
+}
+
+export interface LocatedSectionResult {
+  anchor: string;
+  title: string;
+  score: number;
+}
+
+/**
+ * 章节级微观精确定位算子 (Section-level Locator via Late Chunking)
+ *
+ * 核心机制：
+ * 1. 当整卡召回后，若该卡片具有多个章节，计算用户 Query 与各章节自注意力 Token 池化向量的语义相似度；
+ * 2. 返回排序后的章节高精度列表，让下游无需在几千字正文中漫游，秒级精确定位到某一段落/API。
+ */
+export async function locateTopSectionsWithLateChunking(
+  query: string,
+  docText: string,
+  sections: LateChunkSectionSpan[],
+  topK = 2
+): Promise<LocatedSectionResult[]> {
+  if (!query.trim() || !docText.trim() || sections.length === 0) {
+    return [];
+  }
+
+  const { tokenizer, model } = await getSharedEmbeddingModel();
+
+  // 1. 计算 Query 向量
+  const queryInputs = await tokenizer(query.trim(), { padding: true, truncation: true });
+  const queryOutputs = await model(queryInputs);
+  const qState = queryOutputs.last_hidden_state;
+  const [_b, qSeqLen, qHiddenDim] = qState.dims;
+  const qData: Float32Array = qState.data;
+
+  const qSum = new Float64Array(qHiddenDim);
+  let qTokens = 0;
+  for (let t = 0; t < qSeqLen; t++) {
+    qTokens++;
+    const offset = t * qHiddenDim;
+    for (let d = 0; d < qHiddenDim; d++) {
+      qSum[d] += qData[offset + d];
+    }
+  }
+  const qMean = new Array(qHiddenDim);
+  for (let d = 0; d < qHiddenDim; d++) {
+    qMean[d] = qTokens > 0 ? qSum[d] / qTokens : 0;
+  }
+  const queryVector = normalizeVector(qMean);
+
+  // 2. 计算各章节的 Late Chunk 向量
+  const { chunks } = await computeLateChunking(docText, sections);
+
+  // 3. 计算余弦相似度并按匹配度降序
+  const scoredSections: LocatedSectionResult[] = chunks.map((chunk) => {
+    const score = cosineSimilarityNormalized(queryVector, chunk.vector);
+    return {
+      anchor: chunk.anchor,
+      title: chunk.title,
+      score: Number(score.toFixed(4)),
+    };
+  });
+
+  return scoredSections.sort((a, b) => b.score - a.score).slice(0, topK);
+}
+
