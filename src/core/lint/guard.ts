@@ -14,13 +14,10 @@ export function isProtectedPath(
   return picomatch([...patterns])(normalize(targetPath));
 }
 
+/** 只约束守卫真正消费的字段；input 用 object 承接异构事件，避开全可选属性的弱类型检测 */
 export interface GenericToolCallEvent {
   readonly toolName: string;
-  readonly input?: {
-    readonly path?: string;
-    readonly [key: string]: unknown;
-  };
-  readonly [key: string]: unknown;
+  readonly input?: object;
 }
 
 export interface GuardEvaluationResult {
@@ -40,7 +37,7 @@ export function evaluateToolCallPathGuard(
   }
 ): GuardEvaluationResult | undefined {
   const writeTools = options?.writeToolNames ?? DEFAULT_WRITE_TOOLS;
-  const path = event.input?.path;
+  const path = event.input && "path" in event.input ? event.input.path : undefined;
   if (!writeTools.includes(event.toolName) || !isString(path)) return undefined;
   if (!isProtectedPath(path, options?.protectedPatterns)) return undefined;
 
