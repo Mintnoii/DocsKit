@@ -2,6 +2,19 @@
   "name": "docskit",
   "version": "0.1.0",
   "description": "Pure TypeScript functions for cleaning, compiling, and searching Markdown knowledge bases",
+  "license": "MIT",
+  "author": "Mintnoii",
+  "homepage": "https://github.com/Mintnoii/DocsKit#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mintnoii/DocsKit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Mintnoii/DocsKit/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "type": "module",
   "files": [
     "dist"

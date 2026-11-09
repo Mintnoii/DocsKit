@@ -1,5 +1,9 @@
 # DocsKit
 
+[![npm](https://img.shields.io/badge/npm-docskit-cb3837)](https://www.npmjs.com/package/docskit)
+[![license](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
+[![types](https://img.shields.io/badge/types-TypeScript-3178C6)](./package.json)
+
 把编译型知识库的通用计算做成纯 TypeScript 函数库。
 
 外部长文、团队方案、随手记的碎片进入知识库前，都要走清洗、幂等判定、章节对账、双链索引这几步。每个知识库各写一遍，代码很快分叉：行正则把代码块里的注释当成标题，Frontmatter 一变就把没改动的正文判成新素材，删掉的接口悄悄消失后没人知道要去哪查。DocsKit 把这些计算收成无状态纯函数，业务层只决定素材从哪来、卡片往哪放、检索结果怎么交给模型。
@@ -103,4 +107,4 @@ pnpm build       # tsup 产出 ESM 与声明文件
 
 ## 许可证
 
-许可证尚未选定，选定后补入仓库根目录 `LICENSE` 与 `package.json` 的 `license` 字段。
+[MIT](./LICENSE)
