@@ -40,6 +40,10 @@
       "types": "./dist/ast/index.d.ts",
       "import": "./dist/ast/index.js"
     },
+    "./okf": {
+      "types": "./dist/okf/index.d.ts",
+      "import": "./dist/okf/index.js"
+    },
     "./sense": {
       "types": "./dist/sense/index.d.ts",
       "import": "./dist/sense/index.js"

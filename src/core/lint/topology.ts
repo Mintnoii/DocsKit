@@ -5,7 +5,7 @@
 import { basename, normalize } from "pathe";
 import { group } from "radash";
 import { parseMarkdownSafely } from "../shared/markdown";
-import { validateOKFMetadata } from "../ast/okf-meta";
+import { validateOKFMetadata } from "../okf/okf-meta";
 
 export interface VaultLintCardItem {
   readonly filePath: string;

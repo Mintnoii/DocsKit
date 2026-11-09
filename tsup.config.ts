@@ -5,6 +5,7 @@ export default defineConfig({
   entry: {
     index: "src/index.ts",
     "ast/index": "src/core/ast/index.ts",
+    "okf/index": "src/core/okf/index.ts",
     "sense/index": "src/core/sense/index.ts",
     "patch/index": "src/core/patch/index.ts",
     "lint/index": "src/core/lint/index.ts",

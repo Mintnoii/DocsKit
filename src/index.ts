@@ -2,6 +2,7 @@
 
 export * as hash from "./core/hash/index";
 export * as ast from "./core/ast/index";
+export * as okf from "./core/okf/index";
 export * as snapshot from "./core/snapshot/index";
 export * as sense from "./core/sense/index";
 export * as patch from "./core/patch/index";
@@ -14,6 +15,7 @@ export * from "./core/shared/markdown";
 export * from "./core/shared/numeric";
 export * from "./core/hash/index";
 export * from "./core/ast/index";
+export * from "./core/okf/index";
 export * from "./core/snapshot/index";
 export * from "./core/sense/index";
 export * from "./core/patch/index";

@@ -3,13 +3,13 @@ import { Type, type Static, type TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import { isObject, isString, omit, unique } from "radash";
 import { ensureArray, localIsoDate } from "../shared/markdown";
-import type { ConceptModeling } from "./distiller";
+import type { ConceptModeling } from "../ast/distiller";
 
-let cachedDistillerModule: typeof import("./distiller") | null = null;
+let cachedDistillerModule: typeof import("../ast/distiller") | null = null;
 
-async function getDistillerModule(): Promise<typeof import("./distiller")> {
+async function getDistillerModule(): Promise<typeof import("../ast/distiller")> {
   if (!cachedDistillerModule) {
-    cachedDistillerModule = await import("./distiller");
+    cachedDistillerModule = await import("../ast/distiller");
   }
   return cachedDistillerModule;
 }
