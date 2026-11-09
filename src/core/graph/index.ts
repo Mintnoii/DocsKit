@@ -45,6 +45,18 @@ export function extractWikiOutboundLinks(content: string, options?: WikilinkOpti
   return [...extractWikilinks(content, options)];
 }
 
+/**
+ * 把 wikilink 目标收敛为稳定图谱节点键
+ * 路径式目标 (wiki/learning/foo-bar) 与裸 stem (foo-bar) 归一到同一节点
+ */
+export function toGraphNodeKey(target: string): string {
+  if (!target) return "";
+  const withoutAnchor = target.split("#")[0].trim();
+  const segments = withoutAnchor.split("/").filter(Boolean);
+  const last = segments[segments.length - 1] ?? "";
+  return last.replace(/\.md$/i, "");
+}
+
 /** 中英文混合字数统计（CJK 单字 + Latin 词） */
 export function countContentWords(body: string): number {
   if (!body) return 0;
@@ -54,25 +66,35 @@ export function countContentWords(body: string): number {
 
 export interface GraphCardNode {
   readonly title: string;
+  /** 自定义图谱节点键（如文件名 stem）；缺省时回退 title，保证旧调用方行为不变 */
+  readonly id?: string;
   readonly outboundLinks?: readonly string[];
   readonly backlinks?: readonly string[];
   readonly [key: string]: unknown;
 }
 
-/** 动态索引全量卡片正反向关系图谱，返回全新对象图 */
+/**
+ * 动态索引全量卡片正反向关系图谱，返回全新对象图
+ * 节点键优先取 card.id（业务层可指定 stem 等稳定标识），缺省回退 title
+ */
 export function indexBidirectionalGraph<
   T extends Pick<GraphCardNode, "title" | "outboundLinks" | "backlinks">
 >(
   cardsInput: readonly T[] | Map<string, T>
 ): Map<string, T> {
+  const keyOf = (card: T): string => {
+    const custom = (card as { id?: unknown }).id;
+    return typeof custom === "string" && custom.trim() ? custom : card.title;
+  };
+
   const entries: readonly (readonly [string, T])[] = cardsInput instanceof Map
     ? [...cardsInput.entries()]
-    : cardsInput.map((card) => [card.title, card] as const);
+    : cardsInput.map((card) => [keyOf(card), card] as const);
 
   const inbound = new Map<string, string[]>();
   entries.forEach(([, card]) => {
     (card.outboundLinks ?? []).forEach((targetTitle) => {
-      inbound.set(targetTitle, [...(inbound.get(targetTitle) ?? []), card.title]);
+      inbound.set(targetTitle, [...(inbound.get(targetTitle) ?? []), keyOf(card)]);
     });
   });
 
@@ -81,7 +103,7 @@ export function indexBidirectionalGraph<
       key,
       {
         ...card,
-        backlinks: unique([...(card.backlinks ?? []), ...(inbound.get(card.title) ?? [])]),
+        backlinks: unique([...(card.backlinks ?? []), ...(inbound.get(key) ?? [])]),
       } as T,
     ])
   );

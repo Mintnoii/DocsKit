@@ -7,6 +7,8 @@ export interface ScanMarkdownFilesOptions {
   exclude?: readonly string[];
   /** 是否递归扫描子目录，默认 true */
   recursive?: boolean;
+  /** 仅保留匹配的 Glob 白名单（如 _index 看板文件），用于捞回默认被排除的看板 */
+  include?: readonly string[];
 }
 
 const DEFAULT_EXCLUDES = ["**/_index*.md"] as const;
@@ -26,7 +28,15 @@ export async function getMarkdownFiles(
   if (options?.recursive === false) crawler.withMaxDepth(1);
 
   const rawFiles = (await crawler.crawl(dir).withPromise()) as string[];
-  const isExcluded = picomatch([...DEFAULT_EXCLUDES, ...(options?.exclude ?? [])]);
+  // include 白名单优先：命中即保留，不套用默认排除（用于捞回 _index 看板）
+  const isExcluded = picomatch([
+    ...(options?.include?.length ? [] : DEFAULT_EXCLUDES),
+    ...(options?.exclude ?? []),
+  ]);
+  const isIncluded = options?.include?.length ? picomatch([...options.include]) : null;
 
-  return rawFiles.map((filePath) => normalize(filePath)).filter((filePath) => !isExcluded(filePath));
+  return rawFiles
+    .map((filePath) => normalize(filePath))
+    .filter((filePath) => !isExcluded(filePath))
+    .filter((filePath) => !isIncluded || isIncluded(filePath));
 }
