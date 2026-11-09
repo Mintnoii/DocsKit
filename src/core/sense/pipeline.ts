@@ -1,5 +1,11 @@
-import { cleanTextForVector, buildNgramVocabulary, textToNgramVector, cosineSimilarityVectors } from "./ngram";
-import { rrfFuseScores } from "./index";
+import { tryit, unique } from "radash";
+import {
+  cleanTextForVector,
+  buildNgramVocabulary,
+  textToNgramVector,
+  cosineSimilarityVectors,
+} from "./ngram";
+import { rrfFuseScores } from "./rrf";
 import { createReranker, type RerankConfig } from "./reranker";
 
 export interface HybridSearchableDocument {
@@ -21,42 +27,41 @@ export interface HybridRankingPipelineOptions {
   rerank?: RerankConfig;
 }
 
-/**
- * 纯 TS 批量 N-Gram 稠密向量相似度打分
- */
+const BM25_MIN_SCORE = 0.1;
+const VECTOR_MIN_SCORE = 0.2;
+const DEFAULT_RRF_K = 60;
+const DEFAULT_LIMIT = 10;
+
+/** 纯 TS 批量 N-Gram 稠密向量相似度打分 */
 export function rankDocumentsByNgramVector<T extends HybridSearchableDocument>(
   query: string,
   docs: readonly T[]
 ): Array<{ id: string; score: number }> {
   const cleanQ = cleanTextForVector(query);
-  if (!cleanQ || docs.length === 0) {
-    return docs.map((d) => ({ id: d.id, score: 0 }));
-  }
+  if (!cleanQ || docs.length === 0) return docs.map((doc) => ({ id: doc.id, score: 0 }));
 
   const vocabulary = buildNgramVocabulary([cleanQ]);
-  const vecQ = textToNgramVector(cleanQ, vocabulary);
+  const queryVector = textToNgramVector(cleanQ, vocabulary);
 
-  const results: Array<{ id: string; score: number }> = [];
-
-  for (const doc of docs) {
-    const text = cleanTextForVector(doc.searchBody);
-    const vecD = textToNgramVector(text, vocabulary);
-    const score = cosineSimilarityVectors(vecQ, vecD);
-    results.push({ id: doc.id, score });
-  }
-
-  return results.sort((a, b) => b.score - a.score);
+  return docs
+    .map((doc) => ({
+      id: doc.id,
+      score: cosineSimilarityVectors(
+        queryVector,
+        textToNgramVector(cleanTextForVector(doc.searchBody), vocabulary)
+      ),
+    }))
+    .sort((a, b) => b.score - a.score);
 }
 
-/**
- * 通用多路召回融合与重排管道 (SIGIR RRF + Cross-Encoder Rerank)
- *
- * 核心机制：
- * 1. 接收 BM25 排名与向量排名列表；
- * 2. 结合 rrfFuseScores 融合多通道排名；
- * 3. 若配置了 rerank，自动调度并按相关度进行最终微调；
- * 4. 纯无状态纯函数，Ghost、TeamWiki 与 CLI 均可零感知复用。
- */
+/** 保留原始数组名次（过滤低分项不压缩后续名次） */
+const ranksOf = (
+  results: ReadonlyArray<{ id: string; score: number }>,
+  minScore: number
+): Map<string, number> =>
+  new Map(results.flatMap((res, rank) => (res.score >= minScore ? [[res.id, rank + 1] as const] : [])));
+
+/** 通用多路召回融合与重排管道 (SIGIR RRF + 可选 Cross-Encoder Rerank) */
 export async function executeHybridRankPipeline<T extends HybridSearchableDocument>(
   query: string,
   docs: readonly T[],
@@ -64,61 +69,40 @@ export async function executeHybridRankPipeline<T extends HybridSearchableDocume
   vectorResults: ReadonlyArray<{ id: string; score: number }>,
   options?: HybridRankingPipelineOptions
 ): Promise<HybridRankResult[]> {
-  const K = options?.rrfK || 60;
-  const limit = options?.candidateLimit || 10;
-  const rrfScores = new Map<string, { score: number; bm25Rank?: number; vectorRank?: number }>();
+  const k = options?.rrfK ?? DEFAULT_RRF_K;
+  const limit = options?.candidateLimit ?? DEFAULT_LIMIT;
+  const bm25Ranks = ranksOf(bm25Results, BM25_MIN_SCORE);
+  const vectorRanks = ranksOf(vectorResults, VECTOR_MIN_SCORE);
 
-  bm25Results.forEach((res, rank) => {
-    if (res.score >= 0.1) {
-      const current = rrfScores.get(res.id) || { score: 0 };
-      current.bm25Rank = rank + 1;
-      rrfScores.set(res.id, current);
-    }
-  });
-
-  vectorResults.forEach((res, rank) => {
-    if (res.score >= 0.2) {
-      const current = rrfScores.get(res.id) || { score: 0 };
-      current.vectorRank = rank + 1;
-      rrfScores.set(res.id, current);
-    }
-  });
-
-  let sortedRRF: HybridRankResult[] = Array.from(rrfScores.entries())
-    .map(([id, stats]) => ({
+  let sortedRRF: HybridRankResult[] = unique([...bm25Ranks.keys(), ...vectorRanks.keys()])
+    .map((id) => ({
       id,
-      rrfScore: rrfFuseScores(stats.bm25Rank, stats.vectorRank, K),
-      bm25Rank: stats.bm25Rank,
-      vectorRank: stats.vectorRank,
+      rrfScore: rrfFuseScores(bm25Ranks.get(id), vectorRanks.get(id), k),
+      bm25Rank: bm25Ranks.get(id),
+      vectorRank: vectorRanks.get(id),
     }))
     .sort((a, b) => b.rrfScore - a.rrfScore)
     .slice(0, Math.max(limit * 3, 10));
 
-  // 可选神经网络重排 (Cross-Encoder Reranker)
-  if (options?.rerank?.enabled && sortedRRF.length > 0) {
-    const reranker = createReranker(options.rerank);
-    if (reranker) {
-      try {
-        const docMap = new Map(docs.map((d) => [d.id, d]));
-        const rerankItems = sortedRRF.map((item) => {
-          const doc = docMap.get(item.id);
-          return {
-            id: item.id,
-            text: doc ? `${doc.title}。${doc.searchBody}` : item.id,
-          };
-        });
+  const reranker = options?.rerank?.enabled && sortedRRF.length > 0
+    ? createReranker(options.rerank)
+    : null;
 
-        const rerankScores = await reranker.rerank(query, rerankItems);
-        const scoreMap = new Map(rerankScores.map((s) => [s.id, s.score]));
+  if (reranker) {
+    const docMap = new Map(docs.map((doc) => [doc.id, doc]));
+    const rerankItems = sortedRRF.map((item) => {
+      const doc = docMap.get(item.id);
+      return { id: item.id, text: doc ? `${doc.title}。${doc.searchBody}` : item.id };
+    });
 
-        sortedRRF = [...sortedRRF].sort((a, b) => {
-          const scoreA = scoreMap.get(a.id) ?? -999;
-          const scoreB = scoreMap.get(b.id) ?? -999;
-          return scoreB - scoreA;
-        });
-      } catch (err: any) {
-        console.warn(`[Rerank] 执行异常: ${err.message}，自动平滑降级至 RRF 顺序`);
-      }
+    const [err, scores] = await tryit(async () => reranker.rerank(query, rerankItems))();
+    if (err || !scores) {
+      console.warn(`[Rerank] 执行异常: ${err?.message ?? "无结果"}，自动平滑降级至 RRF 顺序`);
+    } else {
+      const scoreMap = new Map(scores.map((score) => [score.id, score.score]));
+      sortedRRF = [...sortedRRF].sort(
+        (a, b) => (scoreMap.get(b.id) ?? 0) - (scoreMap.get(a.id) ?? 0)
+      );
     }
   }
 

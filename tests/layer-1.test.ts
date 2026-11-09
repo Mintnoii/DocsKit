@@ -11,7 +11,7 @@ import {
   sanitizeFileName,
 } from "../src/index";
 
-describe("Cyberbrain Core Operators Test Suite", () => {
+describe("DocsKit Core Functions Test Suite", () => {
   describe("1. Hash & 0-Token Idempotency Gate", () => {
     it("抹平 CRLF 后哈希应严格一致", () => {
       const crlf = "Line 1\r\nLine 2\r\n";

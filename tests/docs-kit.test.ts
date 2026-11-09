@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { parseMarkdownWithAST, distillMarkdownContent, BM25Engine, computeLateChunking, rrfFuseScores } from "../src/index";
 
-describe("Cyberbrain Engine Core Test Suite", () => {
+describe("DocsKit Engine Core Test Suite", () => {
   it("AST 模块应成功解析章节并杜绝代码注释撕裂", () => {
     const raw = `
 ## 1. 架构痛点
@@ -35,7 +35,7 @@ const z = 3;
     assert.equal(searchRes[0].id, "card1");
   });
 
-  it("RRF 算子计算应满足标准公式", () => {
+  it("RRF 函数计算应满足标准公式", () => {
     const score = rrfFuseScores([1, 2], 60);
     const expected = 1 / 61 + 1 / 62;
     assert.ok(Math.abs(score - expected) < 1e-6);

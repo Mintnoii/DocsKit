@@ -1,135 +1,87 @@
+import { group, sum } from "radash";
+
 export interface BM25Doc {
   id: string;
   tokens: string[];
   length: number;
 }
 
-/**
- * 纯 TypeScript 轻量级 BM25 词项倒排检索器
- * 核心针对前端 API、代码错误码、状态枚举与中英文技术概念进行加权分词
- */
+const CODE_WORD = /[a-zA-Z0-9_\-\$]+/g;
+const NON_CJK = /[^\u4e00-\u9fa5]/g;
+
+/** 纯 TypeScript 轻量级 BM25 倒排检索器（驼峰拆解 + 中文 2-gram） */
 export class BM25Engine {
-  private k1: number;
-  private b: number;
-  private docs: Map<string, BM25Doc> = new Map();
-  private avgdl: number = 0;
-  private docCount: number = 0;
-  private invertedIndex: Map<string, Map<string, number>> = new Map(); // term -> (docId -> freq)
-  private idfCache: Map<string, number> = new Map();
+  private readonly docs = new Map<string, BM25Doc>();
+  private readonly invertedIndex = new Map<string, Map<string, number>>();
+  private readonly idfCache = new Map<string, number>();
+  private avgdl = 0;
+  private docCount = 0;
 
-  constructor(k1 = 1.5, b = 0.75) {
-    this.k1 = k1;
-    this.b = b;
-  }
+  constructor(private readonly k1 = 1.5, private readonly b = 0.75) {}
 
-  /**
-   * 面向前端代码与中文概念的分词器
-   * 1. 拆解驼峰与连字符命名 (如 AudioWorkletNode -> audio, worklet, node, audioworkletnode)
-   * 2. 中文字符按单字与双字切分 (1-gram + 2-gram)
-   */
   public tokenize(text: string): string[] {
-    const tokens: string[] = [];
-    if (!text) return tokens;
+    if (!text) return [];
 
-    // 1. 提取所有连续的英文/数字代码词
-    const codeWords = text.match(/[a-zA-Z0-9_\-\$]+/g) || [];
-    for (const w of codeWords) {
-      const lower = w.toLowerCase();
-      tokens.push(lower);
-      // 拆解驼峰命名 (AudioWorklet -> audio, worklet)
-      const parts = w.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase().split(/[\s_\-]+/);
-      if (parts.length > 1) {
-        for (const p of parts) {
-          if (p.length > 1) tokens.push(p);
-        }
-      }
-    }
+    const codeTokens = (text.match(CODE_WORD) ?? []).flatMap((word) => {
+      const parts = word.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase().split(/[\s_\-]+/);
+      return [word.toLowerCase(), ...(parts.length > 1 ? parts.filter((part) => part.length > 1) : [])];
+    });
 
-    // 2. 提取中文字符：优先按 2-gram 连词切分；单字仅对独立汉字切分，避免常用虚字打翻倒排索引
-    const chinese = text.replace(/[^\u4e00-\u9fa5]/g, "");
-    for (let i = 0; i < chinese.length - 1; i++) {
-      tokens.push(chinese.slice(i, i + 2));
-    }
-    if (chinese.length === 1) {
-      tokens.push(chinese);
-    }
-
-    return tokens;
+    const chinese = text.replace(NON_CJK, "");
+    const chars = [...chinese];
+    return [
+      ...codeTokens,
+      ...chars.slice(0, -1).map((char, idx) => `${char}${chars[idx + 1]}`),
+      ...(chars.length === 1 ? [chinese] : []),
+    ];
   }
 
-  /**
-   * 索引文档
-   */
-  public addDocument(id: string, text: string, titleWeightBoost = 1.0): void {
+  public addDocument(id: string, text: string, titleWeightBoost = 1): void {
     const tokens = this.tokenize(text);
-    const docLength = tokens.length;
-    this.docs.set(id, { id, tokens, length: docLength });
+    this.docs.set(id, { id, tokens, length: tokens.length });
 
-    const termFreq = new Map<string, number>();
-    for (const t of tokens) {
-      termFreq.set(t, (termFreq.get(t) || 0) + 1 * titleWeightBoost);
-    }
-
-    for (const [term, freq] of termFreq.entries()) {
-      if (!this.invertedIndex.has(term)) {
-        this.invertedIndex.set(term, new Map());
-      }
+    const termFreq = tokens.reduce<Map<string, number>>(
+      (acc, term) => acc.set(term, (acc.get(term) ?? 0) + titleWeightBoost),
+      new Map()
+    );
+    [...termFreq].forEach(([term, freq]) => {
+      if (!this.invertedIndex.has(term)) this.invertedIndex.set(term, new Map());
       this.invertedIndex.get(term)!.set(id, freq);
-    }
+    });
 
     this.docCount++;
-    this.recalculateStats();
-  }
-
-  private recalculateStats(): void {
-    let totalLen = 0;
-    for (const doc of this.docs.values()) {
-      totalLen += doc.length;
-    }
-    this.avgdl = this.docCount > 0 ? totalLen / this.docCount : 0;
+    this.avgdl = this.docCount > 0
+      ? sum([...this.docs.values()], (doc) => doc.length) / this.docCount
+      : 0;
     this.idfCache.clear();
   }
 
   private getIDF(term: string): number {
-    if (this.idfCache.has(term)) {
-      return this.idfCache.get(term)!;
-    }
+    const cached = this.idfCache.get(term);
+    if (cached !== undefined) return cached;
 
-    const n = this.invertedIndex.get(term)?.size || 0;
-    // 标准 Lucene / Okapi BM25 变种平滑 IDF 公式
-    const idf = Math.log(1 + (this.docCount - n + 0.5) / (n + 0.5));
-    const finalIdf = Math.max(0.1, idf);
-    this.idfCache.set(term, finalIdf);
-    return finalIdf;
+    const n = this.invertedIndex.get(term)?.size ?? 0;
+    const idf = Math.max(0.1, Math.log(1 + (this.docCount - n + 0.5) / (n + 0.5)));
+    this.idfCache.set(term, idf);
+    return idf;
   }
 
-  /**
-   * 计算单查询的 BM25 检索得分
-   */
   public search(query: string, limit = 10): Array<{ id: string; score: number }> {
-    const queryTokens = this.tokenize(query);
-    const scores = new Map<string, number>();
-
-    for (const term of queryTokens) {
+    const scored = this.tokenize(query).flatMap((term) => {
       const posting = this.invertedIndex.get(term);
-      if (!posting) continue;
+      if (!posting) return [];
 
       const idf = this.getIDF(term);
-
-      for (const [docId, freq] of posting.entries()) {
+      return [...posting].map(([docId, freq]) => {
         const doc = this.docs.get(docId)!;
-        const numerator = freq * (this.k1 + 1);
         const denominator = freq + this.k1 * (1 - this.b + this.b * (doc.length / (this.avgdl || 1)));
-        const termScore = idf * (numerator / denominator);
+        return { id: docId, score: idf * ((freq * (this.k1 + 1)) / denominator) };
+      });
+    });
 
-        scores.set(docId, (scores.get(docId) || 0) + termScore);
-      }
-    }
-
-    const results = Array.from(scores.entries())
-      .map(([id, score]) => ({ id, score }))
-      .sort((a, b) => b.score - a.score);
-
-    return results.slice(0, limit);
+    return Object.entries(group(scored, (entry) => entry.id))
+      .map(([id, entries]) => ({ id, score: sum(entries ?? [], (entry) => entry.score) }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
   }
 }

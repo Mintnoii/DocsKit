@@ -99,6 +99,8 @@ export function isVersionNewer(
     return semver.gt(validIncoming, validCurrent);
   }
 
-  // 3. 兜底字符串自然比对
-  return String(incomingVersion) !== String(currentVersion);
+  // 3. 兜底自然序比对（numeric 保证 rev10 > rev9，绝不把「不相等」当成「更新」）
+  return String(incomingVersion).localeCompare(String(currentVersion), undefined, { numeric: true }) > 0;
 }
+
+export * from "./tombstone";

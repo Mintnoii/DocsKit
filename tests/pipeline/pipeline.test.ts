@@ -6,7 +6,7 @@ import {
   normalizeMarkdownContent,
 } from "../../src/index";
 
-describe("Cyberbrain Configurable Pipeline Engine Test Suite", () => {
+describe("DocsKit Configurable Pipeline Engine Test Suite", () => {
   it("默认 patch 模式应能对比更新已有卡片，保留全文主干", async () => {
     const existing = `---
 title: 服务端渲染方案
@@ -67,14 +67,14 @@ export function loop() {
 \`\`\`
 `;
 
-    // 1. 测试 IPO 算子建模
+    // 1. 测试 IPO 函数建模
     const resIpo = await runPipeline(raw, {
       title: "Prefix Caching 原理",
       compileMode: "distill",
       modeling: "ipo",
     });
     assert.equal(resIpo.action, "DISTILLED");
-    assert.ok(resIpo.content.includes("形态 A · 纯 IPO 算子模型"));
+    assert.ok(resIpo.content.includes("形态 A · 纯 IPO 机制模型"));
     assert.ok(resIpo.content.includes("核心架构契约与设计范式"));
     assert.equal(resIpo.frontmatter.modeling, "ipo");
 

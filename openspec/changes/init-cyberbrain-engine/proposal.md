@@ -26,7 +26,7 @@
    - 整合 `BM25Engine`、`rrfFuseScores`；
    - 整合今日落地的 `computeLateChunking` 通用 ONNX 特征池化引擎（共享 `~/.cache/onnx-models/` 离线权重）。
 3. **差量打补丁模块 (`src/patch/`)**：
-   - 下沉段落级 AST 差量对比与章节退火逻辑（`diffDocumentSections`, `applySectionPatch`）。
+   - 下沉段落级 AST 差量对比与章节废弃标记逻辑（`diffDocumentSections`, `applySectionPatch`）。
 4. **拓扑与巡检模块 (`src/graph/`, `src/lint/`)**：
    - 导出通用的双向双链图谱构建器与 OKF v0.2 Schema 巡检规则。
 

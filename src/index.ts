@@ -1,6 +1,4 @@
-// ==========================================
-// Cyberbrain (電脳) 门面统一聚合导出
-// ==========================================
+// DocsKit 统一门面：命名空间导出 + 扁平函数导出，新增函数只需在所属模块导出一次。
 
 export * as hash from "./core/hash/index";
 export * as ast from "./core/ast/index";
@@ -12,130 +10,14 @@ export * as graph from "./core/graph/index";
 export * as jit from "./core/jit/index";
 export * as pipeline from "./pipeline/index";
 
-// 顶层直接扁平常用算子
-export {
-  computeContentHash,
-  computeMarkdownBodyHash,
-  checkContentIdempotency,
-  type IdempotencyResult,
-} from "./core/hash/index";
-
-export {
-  normalizeMarkdownContent,
-  parseMarkdownWithAST,
-  distillMarkdownContent,
-  appendCardAttachments,
-  createOKFMetadata,
-  createOKFConceptMetadata,
-  updateOKFMetadata,
-  buildOKFConceptCard,
-  getMarkdownFiles,
-  outdent,
-  matterYamlEngine,
-  parseMarkdownSafely,
-  stringifyMarkdownSafely,
-  condenseTitle,
-  renderMarkdownTable,
-  appendUnderHeading,
-  type ScanMarkdownFilesOptions,
-  type MarkdownAttachment,
-  type MarkdownNormalizeResult,
-  type NormalizeOptions,
-  type ParsedMarkdownAST,
-  type ParsedMarkdownSection,
-  type ConceptModeling,
-  type DistillOptions,
-  type CardAttachmentItem,
-  type BuildOKFConceptCardOptions,
-  type OKFConceptCardResult,
-  type ParsedMarkdownResult,
-  type MarkdownTableOptions,
-} from "./core/ast/index";
-
-export {
-  sanitizeFileName,
-  parseSnapshotMeta,
-  buildSnapshotPath,
-  isVersionNewer,
-  type SnapshotMeta,
-} from "./core/snapshot/index";
-
-export {
-  BM25Engine,
-  computeLateChunking,
-  locateTopSectionsWithLateChunking,
-  rrfFuseScores,
-  cleanTextForVector,
-  buildNgramVocabulary,
-  textToNgramVector,
-  cosineSimilarityVectors,
-  computeTextNgramSimilarity,
-  createReranker,
-  HttpReranker,
-  LocalOnnxReranker,
-  rankDocumentsByNgramVector,
-  executeHybridRankPipeline,
-  type HybridSearchableDocument,
-  type HybridRankResult,
-  type HybridRankingPipelineOptions,
-  type LateChunkSectionSpan,
-  type LateChunkItem,
-  type LateChunkOutput,
-  type LocatedSectionResult,
-  type Reranker,
-  type RerankItem,
-  type RerankResult,
-  type RerankConfig,
-} from "./core/sense/index";
-
-
-export {
-  checkHumanLock,
-  lintVaultTopology,
-  auditVaultLifecycle,
-  auditDirectoryVault,
-  loadVaultCardNodes,
-  buildVaultTopologyGraph,
-  type VaultLintCardItem,
-  type BrokenLinkItem,
-  type SchemaViolationItem,
-  type VaultTopologyLintResult,
-  type LifecycleCardItem,
-  type StaleCandidateItem,
-  type VaultLifecycleAuditResult,
-  type VaultAuditOptions,
-  type VaultAuditReport,
-} from "./core/lint/index";
-
-export {
-  extractWikiOutboundLinks,
-  indexBidirectionalGraph,
-  type GraphCardNode,
-} from "./core/graph/index";
-
-export {
-  formatAgentJITPrompt,
-  type JITCardItem,
-  type JITFormatOptions,
-} from "./core/jit/index";
-
-export {
-  diffDocumentSections,
-  applySectionPatch,
-  evaluateDedupGate,
-  computeNgramSimilarity,
-  type SectionDiffResult,
-  type SectionDiffItem,
-  type DedupCandidateItem,
-  type DedupMatchResult,
-  type DedupGateOptions,
-} from "./core/patch/index";
-
-export {
-  runPipeline,
-  type CompileMode,
-  type PipelineOptions,
-  type PipelineResult,
-  type PipelineGates,
-  type PipelineFeatures,
-} from "./pipeline/index";
+export * from "./core/shared/markdown";
+export * from "./core/shared/numeric";
+export * from "./core/hash/index";
+export * from "./core/ast/index";
+export * from "./core/snapshot/index";
+export * from "./core/sense/index";
+export * from "./core/patch/index";
+export * from "./core/lint/index";
+export * from "./core/graph/index";
+export * from "./core/jit/index";
+export * from "./pipeline/index";

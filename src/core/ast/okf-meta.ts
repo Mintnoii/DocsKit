@@ -1,5 +1,8 @@
+import assert from "node:assert/strict";
 import { Type, type Static, type TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
+import { isObject, isString, omit, unique } from "radash";
+import { ensureArray, localIsoDate } from "../shared/markdown";
 import { distillMarkdownContent, parseMarkdownWithAST, type ConceptModeling } from "./distiller";
 
 // ==========================================
@@ -10,13 +13,13 @@ export const OKFStatusSchema = Type.Union([
   Type.Literal("evergreen"),
   Type.Literal("developing"),
   Type.Literal("deprecated"),
-], { default: "evergreen", description: "知识演化生命周期" });
+], { description: "知识演化生命周期（由上游显式给定，缺省即未评估）" });
 
 export const OKFConfidenceSchema = Type.Union([
   Type.Literal("high"),
   Type.Literal("medium"),
   Type.Literal("low"),
-], { default: "high", description: "置信度/成熟度评级" });
+], { description: "置信度/成熟度评级（由上游 LLM 评估给定，代码严禁伪造）" });
 
 // ==========================================
 // 2. 各业务形态卡片 Frontmatter Schema
@@ -36,8 +39,8 @@ export const OKFConceptFrontmatterSchema = Type.Object({
     Type.Literal("hybrid"),
   ], { description: "概念建模形态" }),
   summary: Type.String({ description: "概念核心定义一句话/本质剖析" }),
-  status: OKFStatusSchema,
-  confidence: OKFConfidenceSchema,
+  status: Type.Optional(OKFStatusSchema),
+  confidence: Type.Optional(OKFConfidenceSchema),
   aliases: Type.Optional(Type.Array(Type.String())),
   moc: Type.Optional(Type.Array(Type.String())),
   spines: Type.Optional(Type.Array(Type.String())),
@@ -61,8 +64,8 @@ export const OKFSourceFrontmatterSchema = Type.Object({
   created: Type.String({ minLength: 4, description: "创建日期 YYYY-MM-DD" }),
   updated: Type.String({ minLength: 4, description: "更新日期 YYYY-MM-DD" }),
   category: Type.String({ minLength: 1, description: "所属领域，如 ai-agent / frontend / knowledge" }),
-  status: OKFStatusSchema,
-  confidence: OKFConfidenceSchema,
+  status: Type.Optional(OKFStatusSchema),
+  confidence: Type.Optional(OKFConfidenceSchema),
   author: Type.Optional(Type.String({ description: "原作者" })),
   clusters: Type.Optional(Type.Array(Type.String(), { description: "SEA 信源分簇标记" })),
   sources: Type.Array(OKFSourceItemSchema, { description: "关联的不可变原始文件 SHA256 溯源列表" }),
@@ -71,7 +74,7 @@ export const OKFSourceFrontmatterSchema = Type.Object({
 }, { additionalProperties: true });
 
 /**
- * OKF 人物/布道者/机构实体卡片 Schema (wiki/people/)
+ * OKF 人物/实践者/机构实体卡片 Schema (wiki/people/)
  */
 export const OKFEntityFrontmatterSchema = Type.Object({
   type: Type.Literal("entity"),
@@ -80,7 +83,7 @@ export const OKFEntityFrontmatterSchema = Type.Object({
   updated: Type.String({ minLength: 4, description: "更新日期 YYYY-MM-DD" }),
   domain: Type.String({ minLength: 1, description: "主要所属领域，如 ai-agent" }),
   role: Type.Optional(Type.String({ description: "角色/头衔/学术流派" })),
-  status: OKFStatusSchema,
+  status: Type.Optional(OKFStatusSchema),
   aliases: Type.Optional(Type.Array(Type.String())),
   moc: Type.Optional(Type.Array(Type.String())),
   tags: Type.Optional(Type.Array(Type.String())),
@@ -97,8 +100,8 @@ export const OKFCheatsheetFrontmatterSchema = Type.Object({
   modeling: Type.Literal("recipe", { description: "强类型操作规程建模" }),
   summary: Type.String({ description: "速查定位一句话摘要" }),
   category: Type.String({ minLength: 1, description: "所属业务领域" }),
-  status: OKFStatusSchema,
-  confidence: OKFConfidenceSchema,
+  status: Type.Optional(OKFStatusSchema),
+  confidence: Type.Optional(OKFConfidenceSchema),
   tools: Type.Array(Type.String(), { description: "适用工具/命令列表" }),
   moc: Type.Optional(Type.Array(Type.String())),
   tags: Type.Optional(Type.Array(Type.String())),
@@ -112,7 +115,7 @@ export const OKFDomainFrontmatterSchema = Type.Object({
   title: Type.String({ minLength: 1, description: "领域看板总标题" }),
   created: Type.String({ minLength: 4, description: "创建日期 YYYY-MM-DD" }),
   updated: Type.String({ minLength: 4, description: "更新日期 YYYY-MM-DD" }),
-  status: OKFStatusSchema,
+  status: Type.Optional(OKFStatusSchema),
   tags: Type.Optional(Type.Array(Type.String())),
 }, { additionalProperties: true });
 
@@ -156,12 +159,12 @@ export interface OKFValidationResult {
  * 校验给定数据是否符合指定/自动推断的 OKF 卡片元数据规范
  */
 export function validateOKFMetadata(data: unknown, explicitType?: string): OKFValidationResult {
-  if (typeof data !== "object" || data === null) {
+  if (!isObject(data)) {
     return { valid: false, errors: ["元数据必须为非 null 的普通对象"] };
   }
 
   const rawType = explicitType || (data as Record<string, unknown>).type;
-  if (!rawType || typeof rawType !== "string") {
+  if (!isString(rawType) || !rawType) {
     return { valid: false, errors: ["缺少必需的 'type' 字段或类型不正确"] };
   }
 
@@ -272,119 +275,81 @@ export type CreateOKFMetadataInput =
  * 3. 校验未通过时抛出友好的 TypeError 阻断脏数据入库；
  * 4. 支持任意业务扩展字段（additionalProperties: true）。
  */
-export function createOKFMetadata<T extends OKFFrontmatter = OKFFrontmatter>(
-  input: CreateOKFMetadataInput
-): T {
-  const today = new Date().toISOString().split("T")[0];
-  const {
-    type,
-    title,
-    created = today,
-    updated = today,
-    status = "evergreen",
-    extraMeta = {},
-  } = input;
+const spread = (key: string, value: unknown): Record<string, unknown> =>
+  value === undefined ? {} : { [key]: value };
 
-  let rawMeta: Record<string, unknown>;
+const listOf = (values?: readonly string[]): readonly string[] | undefined =>
+  values && values.length > 0 ? [...values] : undefined;
 
-  switch (type) {
-    case "concept": {
-      rawMeta = {
-        type: "concept",
-        title: title.trim(),
-        created,
-        updated,
-        modeling: input.modeling || "ipo",
+/** 公共基底由工厂统一装配，各卡片形态只声明自己的差异字段 */
+function buildSpecificFields(input: CreateOKFMetadataInput): Record<string, unknown> {
+  switch (input.type) {
+    case "concept":
+      return {
+        modeling: input.modeling ?? "ipo",
         summary: input.summary.trim(),
-        status,
-        confidence: input.confidence || "high",
-        ...(input.aliases && input.aliases.length > 0 ? { aliases: [...input.aliases] } : {}),
-        ...(input.moc && input.moc.length > 0 ? { moc: [...input.moc] } : {}),
-        ...(input.spines && input.spines.length > 0 ? { spines: [...input.spines] } : {}),
-        ...(input.tags && input.tags.length > 0 ? { tags: [...input.tags] } : {}),
-        ...extraMeta,
+        ...spread("confidence", input.confidence),
+        ...spread("aliases", listOf(input.aliases)),
+        ...spread("moc", listOf(input.moc)),
+        ...spread("spines", listOf(input.spines)),
+        ...spread("tags", listOf(input.tags)),
       };
-      break;
-    }
-
-    case "source": {
-      rawMeta = {
-        type: "source",
-        title: title.trim(),
-        created,
-        updated,
+    case "source":
+      return {
         category: input.category.trim(),
-        status,
-        confidence: input.confidence || "high",
         sources: [...input.sources],
-        ...(input.author ? { author: input.author } : {}),
-        ...(input.clusters && input.clusters.length > 0 ? { clusters: [...input.clusters] } : {}),
-        ...(input.tags && input.tags.length > 0 ? { tags: [...input.tags] } : {}),
-        ...(input.moc && input.moc.length > 0 ? { moc: [...input.moc] } : {}),
-        ...extraMeta,
+        ...spread("confidence", input.confidence),
+        ...spread("author", input.author),
+        ...spread("clusters", listOf(input.clusters)),
+        ...spread("tags", listOf(input.tags)),
+        ...spread("moc", listOf(input.moc)),
       };
-      break;
-    }
-
-    case "entity": {
-      rawMeta = {
-        type: "entity",
-        title: title.trim(),
-        created,
-        updated,
+    case "entity":
+      return {
         domain: input.domain.trim(),
-        status,
-        ...(input.role ? { role: input.role } : {}),
-        ...(input.aliases && input.aliases.length > 0 ? { aliases: [...input.aliases] } : {}),
-        ...(input.moc && input.moc.length > 0 ? { moc: [...input.moc] } : {}),
-        ...(input.tags && input.tags.length > 0 ? { tags: [...input.tags] } : {}),
-        ...extraMeta,
+        ...spread("role", input.role),
+        ...spread("aliases", listOf(input.aliases)),
+        ...spread("moc", listOf(input.moc)),
+        ...spread("tags", listOf(input.tags)),
       };
-      break;
-    }
-
-    case "cheatsheet": {
-      rawMeta = {
-        type: "cheatsheet",
-        title: title.trim(),
-        created,
-        updated,
+    case "cheatsheet":
+      return {
         modeling: "recipe",
         summary: input.summary.trim(),
         category: input.category.trim(),
-        status,
-        confidence: input.confidence || "high",
         tools: [...input.tools],
-        ...(input.moc && input.moc.length > 0 ? { moc: [...input.moc] } : {}),
-        ...(input.tags && input.tags.length > 0 ? { tags: [...input.tags] } : {}),
-        ...extraMeta,
+        ...spread("confidence", input.confidence),
+        ...spread("moc", listOf(input.moc)),
+        ...spread("tags", listOf(input.tags)),
       };
-      break;
+    case "domain":
+      return { ...spread("tags", listOf(input.tags)) };
+    default: {
+      const exhaustiveCheck: never = input;
+      throw new TypeError(`[DocsKit OKF Validator] 不支持的卡片类型: ${String(exhaustiveCheck)}`);
     }
-
-    case "domain": {
-      rawMeta = {
-        type: "domain",
-        title: title.trim(),
-        created,
-        updated,
-        status,
-        ...(input.tags && input.tags.length > 0 ? { tags: [...input.tags] } : {}),
-        ...extraMeta,
-      };
-      break;
-    }
-
-    default:
-      throw new TypeError(`[Cyberbrain OKF Validator] 不支持的卡片类型: ${(input as any).type}`);
   }
+}
+
+export function createOKFMetadata<T extends OKFFrontmatter = OKFFrontmatter>(
+  input: CreateOKFMetadataInput
+): T {
+  const { type, title, created = localIsoDate(), updated = localIsoDate(), extraMeta = {} } = input;
+  const rawMeta: Record<string, unknown> = {
+    type,
+    title: title.trim(),
+    created,
+    updated,
+    ...spread("status", input.status),
+    ...buildSpecificFields(input),
+    ...extraMeta,
+  };
 
   const { valid, errors } = validateOKFMetadata(rawMeta, type);
-  if (!valid) {
-    throw new TypeError(
-      `[Cyberbrain OKF Validator] OKF v0.2 (${type}) Frontmatter 格式校验失败: ${errors.join("; ")}`
-    );
-  }
+  assert(
+    valid,
+    `[DocsKit OKF Validator] OKF v0.2 (${type}) Frontmatter 格式校验失败: ${errors.join("; ")}`
+  );
 
   return rawMeta as T;
 }
@@ -400,7 +365,7 @@ export function createOKFConceptMetadata(
 }
 
 // ==========================================
-// 5. 元数据增量更新与合并算子 (Update/Patch)
+// 5. 元数据增量更新与合并函数 (Update/Patch)
 // ==========================================
 
 export type OKFUpdatePatch<T extends OKFFrontmatter> = Partial<
@@ -420,76 +385,76 @@ export type OKFUpdatePatch<T extends OKFFrontmatter> = Partial<
  * 4. 【信源智能累加】：针对 source 类型的 sources 列表，依据 id (sha256) 唯一键进行差量累加去重；
  * 5. 【强类型门禁防线】：合并后全量经过 TypeBox validateOKFMetadata 校验，杜绝因补丁导致脏元数据污染。
  */
+interface SourceRef {
+  readonly id: string;
+  readonly [key: string]: unknown;
+}
+
+const MERGEABLE_LIST_KEYS = ["aliases", "moc", "spines", "tags", "clusters", "tools"] as const;
+
+const mergeList = (oldValue: unknown, newValue: unknown): readonly string[] | undefined => {
+  const combined = unique(
+    [...ensureArray<string>(oldValue), ...ensureArray<string>(newValue)]
+      .map((item) => String(item).trim())
+      .filter(Boolean)
+  );
+  return combined.length > 0 ? combined : undefined;
+};
+
+/** 按 sha256 id 唯一键对溯源列表做差量累加，同 id 以补丁字段覆盖 */
+const mergeSources = (...groups: readonly unknown[]): readonly SourceRef[] =>
+  [
+    ...groups
+      .flatMap((group) => ensureArray<SourceRef>(group))
+      .filter((item) => item?.id)
+      .reduce<Map<string, SourceRef>>(
+        (acc, item) => acc.set(item.id, { ...acc.get(item.id), ...item }),
+        new Map()
+      )
+      .values(),
+  ];
+
 export function updateOKFMetadata<T extends OKFFrontmatter>(
   existing: T,
   patch: OKFUpdatePatch<T>,
   options?: { readonly today?: string }
 ): T {
-  if (typeof existing !== "object" || existing === null || !existing.type) {
-    throw new TypeError(`[Cyberbrain OKF Validator] 待更新的现有元数据不合法`);
-  }
+  assert(isObject(existing) && existing.type, "[DocsKit OKF Validator] 待更新的现有元数据不合法");
 
-  const today = options?.today || new Date().toISOString().split("T")[0];
+  const patchRecord = patch as Record<string, unknown>;
+  const existingRecord = existing as Record<string, unknown>;
 
-  // 1. 数组字段智能集合去重合并辅助函数
-  const mergeArray = (oldArr?: readonly string[], newArr?: readonly string[]): string[] | undefined => {
-    if (!oldArr && !newArr) return undefined;
-    const combined = [...(oldArr || []), ...(newArr || [])].map((item) => String(item).trim()).filter(Boolean);
-    return Array.from(new Set(combined));
-  };
+  const mergedLists = MERGEABLE_LIST_KEYS.reduce<Record<string, unknown>>((acc, key) => {
+    const united = mergeList(existingRecord[key], patchRecord[key]);
+    return united ? { ...acc, [key]: united } : acc;
+  }, {});
 
-  // 2. 基础对象克隆与浅合并
+  // extraMeta 是控制字段而非元数据，序列化前从补丁中剔除
+  const patchFields = omit(patchRecord, ["extraMeta"]);
   const merged: Record<string, unknown> = {
-    ...existing,
-    ...patch,
-    type: existing.type, // 绝对锁定类型，防止串味
-    created: existing.created, // 严格保留诞生日期
-    updated: (patch as any).updated || today, // 自动刷新时效
+    ...existingRecord,
+    ...patchFields,
+    type: existing.type,
+    created: existing.created,
+    updated: isString(patchRecord.updated) ? patchRecord.updated : options?.today ?? localIsoDate(),
+    ...mergedLists,
+    ...(existing.type === "source"
+      ? { sources: mergeSources(existingRecord.sources, patchRecord.sources) }
+      : {}),
+    ...(patch.extraMeta ?? {}),
   };
 
-  // 3. 针对数组字段执行集合合并 (aliases, moc, spines, tags, clusters, tools)
-  const arrayKeys = ["aliases", "moc", "spines", "tags", "clusters", "tools"] as const;
-  for (const key of arrayKeys) {
-    if ((existing as any)[key] || (patch as any)[key]) {
-      const united = mergeArray((existing as any)[key], (patch as any)[key]);
-      if (united && united.length > 0) {
-        merged[key] = united;
-      }
-    }
-  }
-
-  // 4. 特殊处理 source 卡片的 sources 溯源数组（按 sha256 id 唯一键幂等合并）
-  if (existing.type === "source" && ((existing as any).sources || (patch as any).sources)) {
-    const existingSources = ((existing as any).sources || []) as Array<{ id: string; [k: string]: unknown }>;
-    const patchSources = ((patch as any).sources || []) as Array<{ id: string; [k: string]: unknown }>;
-    const sourceMap = new Map<string, { id: string; [k: string]: unknown }>();
-    for (const s of existingSources) {
-      if (s?.id) sourceMap.set(s.id, s);
-    }
-    for (const s of patchSources) {
-      if (s?.id) sourceMap.set(s.id, { ...(sourceMap.get(s.id) || {}), ...s });
-    }
-    merged.sources = Array.from(sourceMap.values());
-  }
-
-  // 5. 合并 extraMeta
-  if (patch.extraMeta) {
-    Object.assign(merged, patch.extraMeta);
-  }
-
-  // 6. 运行时格式门禁强校验
   const { valid, errors } = validateOKFMetadata(merged, existing.type);
-  if (!valid) {
-    throw new TypeError(
-      `[Cyberbrain OKF Validator] 更新后 OKF (${existing.type}) Frontmatter 格式校验失败: ${errors.join("; ")}`
-    );
-  }
+  assert(
+    valid,
+    `[DocsKit OKF Validator] 更新后 OKF (${existing.type}) Frontmatter 格式校验失败: ${errors.join("; ")}`
+  );
 
   return merged as T;
 }
 
 // ==========================================
-// 6. 正文辅助算子与高层便利组合器
+// 6. 正文辅助函数与高层便利组合器
 // ==========================================
 
 export interface CardAttachmentItem {
@@ -499,7 +464,7 @@ export interface CardAttachmentItem {
 }
 
 /**
- * 纯正文附件追加算子 (完全解耦元数据)
+ * 纯正文附件追加函数 (完全解耦元数据)
  */
 export function appendCardAttachments(body: string, attachments?: readonly CardAttachmentItem[]): string {
   if (!attachments || attachments.length === 0) {
@@ -544,15 +509,15 @@ export function buildOKFConceptCard(options: BuildOKFConceptCardOptions): OKFCon
     cleanContent,
     modeling = "ipo",
     summary: customSummary,
-    status = "evergreen",
-    confidence = "high",
+    status,
+    confidence,
     aliases = [],
     moc = [],
     spines = [],
     tags = [],
     extraMeta = {},
     attachments = [],
-    today = new Date().toISOString().split("T")[0],
+    today = localIsoDate(),
   } = options;
 
   let finalSummary = customSummary;

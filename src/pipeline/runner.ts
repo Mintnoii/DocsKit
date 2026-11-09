@@ -1,24 +1,53 @@
-import matter from "gray-matter";
+import { computeMarkdownBodyHash } from "../core/hash/index";
 import { normalizeMarkdownContent } from "../core/ast/normalize";
 import { distillMarkdownContent } from "../core/ast/distiller";
-import { computeMarkdownBodyHash, checkContentIdempotency } from "../core/hash/index";
 import { diffDocumentSections, applySectionPatch } from "../core/patch/section-patcher";
 import { checkHumanLock } from "../core/lint/index";
-import type { PipelineOptions, PipelineResult } from "./options";
+import { parseMarkdownSafely, stringifyMarkdownSafely } from "../core/shared/markdown";
+import type { CompileMode, PipelineOptions, PipelineResult } from "./options";
+
+interface CompileContext {
+  readonly normalizedContent: string;
+  readonly existingContent?: string;
+  readonly title: string;
+  readonly modeling?: "ipo" | "decomposition" | "hybrid";
+  readonly deprecationNotice: boolean;
+}
+
+interface CompileOutcome {
+  readonly content: string;
+  readonly action: PipelineResult["action"];
+  /** patch 阶段推导出的元数据补丁（废弃声明），由组装层统一落盘 */
+  readonly patchMeta?: Readonly<Record<string, unknown>>;
+}
+
+const COMPILE_STRATEGIES: Readonly<Record<CompileMode, (ctx: CompileContext) => CompileOutcome>> = {
+  distill: (ctx) => ({
+    content: distillMarkdownContent(ctx.normalizedContent, ctx.title, { modeling: ctx.modeling }),
+    action: "DISTILLED",
+  }),
+  patch: (ctx) => {
+    if (!ctx.existingContent) return { content: ctx.normalizedContent, action: "CREATED" };
+
+    const diff = diffDocumentSections(ctx.existingContent, ctx.normalizedContent, ctx.title);
+    return {
+      content: applySectionPatch(ctx.existingContent, diff, {
+        appendDeprecatedWarning: ctx.deprecationNotice,
+      }),
+      action: "PATCHED",
+      patchMeta: diff.hasDeprecated
+        ? { deprecation_warning: diff.deprecatedDetails.join("; ") }
+        : {},
+    };
+  },
+  passThrough: (ctx) => ({ content: ctx.normalizedContent, action: "CREATED" }),
+};
 
 /**
- * 知识库声明式通用编译流水线执行器 (Configurable Pipeline Runner)
- *
- * 严格执行 4 阶段正交管道：
- * 1. 清洗 (Sanitize)：抹平换行、统一 Callout 为 GitHub 块引用、提取附件资产；
- * 2. 门禁 (Gate)：0-Token 纯正文指纹幂等校验 + 人工锁阻断；
- * 3. 提纯与对账 (Process)：
- *    - patch: 按章节 AST 对比增量合并，支持废弃警告；
- *    - distill: 抽取核心定义、IPO 结构与精选代码；
- *    - passThrough: 直通；
- * 4. 元数据计算与交付格式化：执行自定义元数据转换与标准 YAML 前置封装。
+ * 声明式通用编译流水线：清洗 → 门禁 → 提纯对账 → 元数据组装。
+ * 各阶段纯查表分派，patch 模式保留旧卡片 frontmatter 并落盘废弃声明。
  */
-export async function runPipeline<TMeta extends Record<string, any> = Record<string, any>>(
+export async function runPipeline<TMeta extends object = Record<string, unknown>>(
   rawInput: string,
   options: PipelineOptions<TMeta>
 ): Promise<PipelineResult<TMeta>> {
@@ -32,93 +61,70 @@ export async function runPipeline<TMeta extends Record<string, any> = Record<str
     knownFingerprints,
     metadata = {},
   } = options;
+  const { idempotency = true, humanLock = true } = gates;
+  const { extractAttachments = true, deprecationNotice = false, transformLink } = features;
 
-  const {
-    idempotency = true,
-    humanLock = true,
-  } = gates;
+  const normalized = normalizeMarkdownContent(rawInput, { extractAttachments, transformLink });
 
-  const {
-    extractAttachments = true,
-    deprecationNotice = false,
-    transformLink,
-  } = features;
-
-  // 阶段 1：格式清洗 (Sanitize)
-  const normalized = normalizeMarkdownContent(rawInput, {
-    extractAttachments,
-    transformLink,
-  });
-
-  // 阶段 2：门禁检查 (Gate)
-  // 门禁 A：人工锁检查 (若目标已有人工锁标记，坚决阻断)
+  // 门禁 A：人工锁阻断
   if (humanLock && existingContent && checkHumanLock(existingContent)) {
-    const existingParsed = matter(existingContent);
+    const { data, content } = parseMarkdownSafely(existingContent);
     return {
       action: "SKIPPED_HUMAN_LOCK",
       skipped: true,
       skipReason: "LOCKED_BY_HUMAN",
-      content: existingParsed.content.trim(),
+      content: content.trim(),
       fullMarkdown: existingContent,
       bodyHash: computeMarkdownBodyHash(existingContent),
-      frontmatter: existingParsed.data as TMeta,
+      frontmatter: data as TMeta,
       attachments: [],
     };
   }
 
-  // 门禁 B：0-Token 纯正文指纹幂等检查
+  // 门禁 B：0-Token 纯正文指纹幂等短路
   const currentBodyHash = computeMarkdownBodyHash(normalized.cleanContent);
-  if (idempotency && currentBodyHash) {
-    if (knownFingerprints && knownFingerprints.has(currentBodyHash)) {
-      return {
-        action: "SKIPPED_IDEMPOTENCY",
-        skipped: true,
-        skipReason: "UNCHANGED_HASH",
-        content: normalized.cleanContent,
-        fullMarkdown: rawInput,
-        bodyHash: currentBodyHash,
-        frontmatter: normalized.frontmatter as TMeta,
-        attachments: normalized.attachments,
-      };
-    }
+  if (idempotency && currentBodyHash && knownFingerprints?.has(currentBodyHash)) {
+    return {
+      action: "SKIPPED_IDEMPOTENCY",
+      skipped: true,
+      skipReason: "UNCHANGED_HASH",
+      content: normalized.cleanContent,
+      fullMarkdown: rawInput,
+      bodyHash: currentBodyHash,
+      frontmatter: normalized.frontmatter as TMeta,
+      attachments: normalized.attachments,
+    };
   }
 
-  // 阶段 3：提纯与对账 (Process)
-  let processedContent = normalized.cleanContent;
-  let actionResult: PipelineResult<TMeta>["action"] = "CREATED";
+  const outcome = COMPILE_STRATEGIES[compileMode]({
+    normalizedContent: normalized.cleanContent,
+    existingContent,
+    title,
+    modeling,
+    deprecationNotice,
+  });
 
-  if (compileMode === "distill") {
-    processedContent = distillMarkdownContent(normalized.cleanContent, title, {
-      modeling,
-    });
-    actionResult = "DISTILLED";
-  } else if (compileMode === "patch" && existingContent) {
-    const patchDiff = diffDocumentSections(existingContent, normalized.cleanContent, title);
-    processedContent = applySectionPatch(existingContent, patchDiff, {
-      appendDeprecatedWarning: deprecationNotice,
-    });
-    actionResult = "PATCHED";
-  }
-
-  // 阶段 4：元数据计算与封装 (Metadata & Assemble)
-  const defaultModeling = compileMode === "distill" && modeling ? { modeling } : {};
+  // 旧卡片元数据作为基底，新素材 frontmatter 覆盖，废弃声明最后并入
+  const existingMeta = compileMode === "patch" && existingContent
+    ? parseMarkdownSafely(existingContent).data
+    : {};
   const baseData = {
-    ...defaultModeling,
-    ...(metadata.defaultValues || {}),
-    ...(normalized.frontmatter || {}),
+    ...(compileMode === "distill" && modeling ? { modeling } : {}),
+    ...(metadata.defaultValues ?? {}),
+    ...existingMeta,
+    ...normalized.frontmatter,
+    ...(outcome.patchMeta ?? {}),
   } as TMeta;
 
   const finalFrontmatter = metadata.transform
-    ? metadata.transform(baseData, processedContent)
+    ? metadata.transform(baseData, outcome.content)
     : baseData;
 
-  const fullMarkdown = matter.stringify(processedContent, finalFrontmatter);
-
   return {
-    action: actionResult,
+    action: outcome.action,
     skipped: false,
-    content: processedContent,
-    fullMarkdown,
+    content: outcome.content,
+    fullMarkdown: stringifyMarkdownSafely(outcome.content, finalFrontmatter as Record<string, unknown>),
     bodyHash: currentBodyHash,
     frontmatter: Object.freeze(finalFrontmatter),
     attachments: normalized.attachments,

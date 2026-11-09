@@ -2,10 +2,14 @@ import { AutoTokenizer, AutoModel, env } from "@xenova/transformers";
 import os from "node:os";
 import fs from "node:fs";
 import { join } from "pathe";
+import { dotProduct, normalizeVector } from "../shared/numeric";
 
-// 规范全机公共离线模型权重缓存目录，Ghost 与 TeamWiki 共享 ~/.cache/onnx-models
+// 全机公共离线模型权重缓存：Ghost 与 TeamWiki 共享 ~/.cache/onnx-models
 const SHARED_CACHE_DIR = join(os.homedir(), ".cache", "onnx-models");
 env.localModelPath = SHARED_CACHE_DIR;
+
+const DEFAULT_MODEL = "Xenova/bge-small-zh-v1.5";
+const SPECIAL_TOKENS = new Set(["[CLS]", "[SEP]", "<s>", "</s>"]);
 
 export interface LateChunkSectionSpan {
   anchor: string;
@@ -25,83 +29,87 @@ export interface LateChunkOutput {
   chunks: LateChunkItem[];
 }
 
-let cachedTokenizer: any = null;
-let cachedModel: any = null;
-const DEFAULT_MODEL = "Xenova/bge-small-zh-v1.5";
+/** 外部 ONNX 运行时的最小结构化契约，替代散落 any */
+interface EncodedInputs {
+  readonly input_ids: { readonly data: ArrayLike<number> };
+}
+interface HiddenState {
+  readonly dims: readonly number[];
+  readonly data: Float32Array;
+}
+interface TokenizerRuntime {
+  (text: string, options?: Record<string, unknown>): Promise<EncodedInputs> | EncodedInputs;
+  readonly model: { convert_ids_to_tokens(ids: number[]): string[] };
+}
+interface ModelRuntime {
+  (inputs: unknown): Promise<{ last_hidden_state: HiddenState }>;
+}
 
-/**
- * 惰性初始化纯 ONNX 本地嵌入模型与分词器 (零 Python、零独立服务进程)
- */
-export async function getSharedEmbeddingModel(modelName = DEFAULT_MODEL) {
+let cachedTokenizer: TokenizerRuntime | null = null;
+let cachedModel: ModelRuntime | null = null;
+
+/** 惰性初始化纯 ONNX 本地嵌入模型，命中共享缓存即强制离线 */
+export async function getSharedEmbeddingModel(
+  modelName = DEFAULT_MODEL
+): Promise<{ tokenizer: TokenizerRuntime; model: ModelRuntime }> {
   if (!cachedTokenizer || !cachedModel) {
-    // 检查本地共享缓存中是否存在该模型，存在则强制纯离线加载，阻断外网拉取超时
-    const localDir = join(SHARED_CACHE_DIR, modelName);
-    if (fs.existsSync(localDir)) {
-      env.allowRemoteModels = false;
-    }
-    cachedTokenizer = await AutoTokenizer.from_pretrained(modelName);
-    cachedModel = await AutoModel.from_pretrained(modelName);
+    if (fs.existsSync(join(SHARED_CACHE_DIR, modelName))) env.allowRemoteModels = false;
+    cachedTokenizer = await AutoTokenizer.from_pretrained(modelName) as unknown as TokenizerRuntime;
+    cachedModel = await AutoModel.from_pretrained(modelName) as unknown as ModelRuntime;
   }
   return { tokenizer: cachedTokenizer, model: cachedModel };
 }
 
-/**
- * L2 范数归一化向量
- */
-function normalizeVector(vec: number[]): number[] {
-  let sumSq = 0;
-  for (const v of vec) sumSq += v * v;
-  const norm = Math.sqrt(sumSq) || 1e-12;
-  return vec.map((v) => v / norm);
-}
-
-/**
- * 将字符偏移量区间转换为 Token 下标区间
- */
+/** 字符偏移量区间映射为 Token 下标区间（跳过特殊标记） */
 function mapCharOffsetsToTokenRange(
   charStart: number,
   charEnd: number,
-  tokens: string[]
+  tokens: readonly string[]
 ): [number, number] {
-  let curChar = 0;
-  let tokenStart = -1;
-  let tokenEnd = -1;
+  const { spans } = tokens.reduce<{
+    cursor: number;
+    spans: { index: number; start: number; end: number }[];
+  }>(
+    (acc, rawTok, index) => {
+      if (SPECIAL_TOKENS.has(rawTok)) return acc;
+      const length = rawTok.replace(/^##/, "").length;
+      const span = { index, start: acc.cursor, end: acc.cursor + length };
+      return { cursor: span.end, spans: [...acc.spans, span] };
+    },
+    { cursor: 0, spans: [] }
+  );
 
-  for (let i = 0; i < tokens.length; i++) {
-    const rawTok = tokens[i];
-    // 忽略特殊标记
-    if (rawTok === "[CLS]" || rawTok === "[SEP]" || rawTok === "<s>" || rawTok === "</s>") {
-      continue;
-    }
-    const cleanTok = rawTok.replace(/^##/, "");
-    const tokLen = cleanTok.length;
-    const tokStart = curChar;
-    const tokEnd = curChar + tokLen;
+  const covered = spans.filter((span) => span.end > charStart && span.start < charEnd);
+  const from = covered[0]?.index ?? 1;
+  const to = (covered.at(-1)?.index ?? Math.min(tokens.length - 2, from)) + 1;
+  return [from, Math.max(from + 1, Math.min(to, tokens.length))];
+}
 
-    if (tokEnd > charStart && tokenStart === -1) {
-      tokenStart = i;
-    }
-    if (tokStart < charEnd) {
-      tokenEnd = i + 1;
-    }
-    curChar += tokLen;
-  }
+/** 对指定 Token 区间做均值池化（数值内核保留紧凑循环以保证吞吐） */
+function poolTokens(
+  data: Float32Array,
+  hiddenDim: number,
+  seqLen: number,
+  tokens: readonly string[],
+  range: readonly number[]
+): { mean: number[]; count: number } {
+  let count = 0;
+  const sum = range.reduce<Float64Array>((acc, t) => {
+    if (t >= seqLen || SPECIAL_TOKENS.has(tokens[t])) return acc;
+    count++;
+    const offset = t * hiddenDim;
+    return Float64Array.from(acc, (value, d) => value + data[offset + d]);
+  }, new Float64Array(hiddenDim));
 
-  // 兜底防越界
-  if (tokenStart === -1) tokenStart = 1;
-  if (tokenEnd === -1 || tokenEnd <= tokenStart) tokenEnd = Math.min(tokens.length - 1, tokenStart + 1);
-
-  return [tokenStart, tokenEnd];
+  return {
+    count,
+    mean: count > 0 ? [...sum].map((value) => value / count) : new Array<number>(hiddenDim).fill(0),
+  };
 }
 
 /**
- * 跨工程通用 Late Chunking 计算核心
- * 
- * 机制：
- * 1. 先将整篇文本完整送入 Transformer，获取整篇 Token 级全局隐层特征矩阵 [1, seq_len, hidden_dim]；
- * 2. 对整篇计算 [CLS] 或全局 Mean-Pooling 获得 docVector；
- * 3. 顺着 AST 各章节的字符 Span，映射到对应的 Token 子区间，进行 Mean-Pooling 得到各章节向量。
- * 产出的章节向量天然浸润了整篇文本全局自注意力的上下文！
+ * Late Chunking：整篇送入 Transformer 后按章节 Span 池化，
+ * 章节向量天然浸润全文自注意力上下文。
  */
 export async function computeLateChunking(
   fullText: string,
@@ -110,81 +118,31 @@ export async function computeLateChunking(
 ): Promise<LateChunkOutput> {
   const { tokenizer, model } = await getSharedEmbeddingModel(modelName);
 
-  // 1. 整体文本编码 (截断到模型最大支持长度，如 512，避免维度广播溢出)
-  const inputs = tokenizer(fullText, {
-    max_length: 512,
-    truncation: true,
-  });
-  const inputIds: number[] = Array.from(inputs.input_ids.data);
-  const tokens: string[] = tokenizer.model.convert_ids_to_tokens(inputIds);
+  const inputs = await tokenizer(fullText, { max_length: 512, truncation: true });
+  const inputIds = Array.from(inputs.input_ids.data);
+  const tokens = tokenizer.model.convert_ids_to_tokens(inputIds);
 
-  // 2. Transformer 推理得到所有 Token 最后一层特征张量: dims = [1, seq_len, hidden_dim]
   const outputs = await model(inputs);
   const lastHiddenState = outputs.last_hidden_state;
   const [_batch, seqLen, hiddenDim] = lastHiddenState.dims;
-  const tensorData: Float32Array = lastHiddenState.data;
+  const tensorData = lastHiddenState.data;
 
-  // 3. 计算整卡 docVector (全局均值池化)
-  const globalSum = new Float64Array(hiddenDim);
-  let validTokenCount = 0;
-  for (let t = 0; t < seqLen; t++) {
-    const tok = tokens[t];
-    if (tok === "[CLS]" || tok === "[SEP]") continue;
-    validTokenCount++;
-    const offset = t * hiddenDim;
-    for (let d = 0; d < hiddenDim; d++) {
-      globalSum[d] += tensorData[offset + d];
-    }
-  }
-  const globalMean = new Array(hiddenDim);
-  for (let d = 0; d < hiddenDim; d++) {
-    globalMean[d] = validTokenCount > 0 ? globalSum[d] / validTokenCount : 0;
-  }
+  const allTokens = Array.from({ length: seqLen }, (_, idx) => idx);
+  const { mean: globalMean } = poolTokens(tensorData, hiddenDim, seqLen, tokens, allTokens);
   const docVector = normalizeVector(globalMean);
 
-  // 4. 按 AST 章节 Span 提取具有全局上下文的章节向量 (Late Chunking Mean-Pooling)
-  const chunks: LateChunkItem[] = [];
-
-  for (const sec of sections) {
-    const [tFrom, tTo] = mapCharOffsetsToTokenRange(sec.startOffset, sec.endOffset, tokens);
-    const chunkSum = new Float64Array(hiddenDim);
-    let count = 0;
-
-    for (let t = tFrom; t < tTo && t < seqLen; t++) {
-      const tok = tokens[t];
-      if (tok === "[CLS]" || tok === "[SEP]") continue;
-      count++;
-      const offset = t * hiddenDim;
-      for (let d = 0; d < hiddenDim; d++) {
-        chunkSum[d] += tensorData[offset + d];
-      }
-    }
-
-    const chunkMean = new Array(hiddenDim);
-    for (let d = 0; d < hiddenDim; d++) {
-      chunkMean[d] = count > 0 ? chunkSum[d] / count : globalMean[d];
-    }
-
-    chunks.push({
-      anchor: sec.anchor,
-      title: sec.title,
-      vector: normalizeVector(chunkMean),
-    });
-  }
+  const chunks = sections.map((section): LateChunkItem => {
+    const [tFrom, tTo] = mapCharOffsetsToTokenRange(section.startOffset, section.endOffset, tokens);
+    const range = Array.from({ length: tTo - tFrom }, (_, idx) => tFrom + idx);
+    const pooled = poolTokens(tensorData, hiddenDim, seqLen, tokens, range);
+    return {
+      anchor: section.anchor,
+      title: section.title,
+      vector: normalizeVector(pooled.count > 0 ? pooled.mean : globalMean),
+    };
+  });
 
   return { docVector, chunks };
-}
-
-/**
- * 余弦相似度点积纯函数 (归一化向量)
- */
-function cosineSimilarityNormalized(vecA: number[], vecB: number[]): number {
-  if (vecA.length !== vecB.length) return 0;
-  let dot = 0;
-  for (let i = 0; i < vecA.length; i++) {
-    dot += vecA[i] * vecB[i];
-  }
-  return dot;
 }
 
 export interface LocatedSectionResult {
@@ -193,60 +151,37 @@ export interface LocatedSectionResult {
   score: number;
 }
 
-/**
- * 章节级微观精确定位算子 (Section-level Locator via Late Chunking)
- *
- * 核心机制：
- * 1. 当整卡召回后，若该卡片具有多个章节，计算用户 Query 与各章节自注意力 Token 池化向量的语义相似度；
- * 2. 返回排序后的章节高精度列表，让下游无需在几千字正文中漫游，秒级精确定位到某一段落/API。
- */
+/** 章节级微观精确定位：Query 向量与各章节 Late Chunk 向量比对 */
 export async function locateTopSectionsWithLateChunking(
   query: string,
   docText: string,
   sections: LateChunkSectionSpan[],
   topK = 2
 ): Promise<LocatedSectionResult[]> {
-  if (!query.trim() || !docText.trim() || sections.length === 0) {
-    return [];
-  }
+  if (!query.trim() || !docText.trim() || sections.length === 0) return [];
 
   const { tokenizer, model } = await getSharedEmbeddingModel();
-
-  // 1. 计算 Query 向量
   const queryInputs = await tokenizer(query.trim(), { padding: true, truncation: true });
   const queryOutputs = await model(queryInputs);
   const qState = queryOutputs.last_hidden_state;
   const [_b, qSeqLen, qHiddenDim] = qState.dims;
-  const qData: Float32Array = qState.data;
 
-  const qSum = new Float64Array(qHiddenDim);
-  let qTokens = 0;
-  for (let t = 0; t < qSeqLen; t++) {
-    qTokens++;
-    const offset = t * qHiddenDim;
-    for (let d = 0; d < qHiddenDim; d++) {
-      qSum[d] += qData[offset + d];
-    }
-  }
-  const qMean = new Array(qHiddenDim);
-  for (let d = 0; d < qHiddenDim; d++) {
-    qMean[d] = qTokens > 0 ? qSum[d] / qTokens : 0;
-  }
-  const queryVector = normalizeVector(qMean);
+  const { mean: queryMean } = poolTokens(
+    qState.data,
+    qHiddenDim,
+    qSeqLen,
+    new Array<string>(qSeqLen).fill(""),
+    Array.from({ length: qSeqLen }, (_, idx) => idx)
+  );
+  const queryVector = normalizeVector(queryMean);
 
-  // 2. 计算各章节的 Late Chunk 向量
   const { chunks } = await computeLateChunking(docText, sections);
-
-  // 3. 计算余弦相似度并按匹配度降序
-  const scoredSections: LocatedSectionResult[] = chunks.map((chunk) => {
-    const score = cosineSimilarityNormalized(queryVector, chunk.vector);
-    return {
+  return chunks
+    .map((chunk) => ({
       anchor: chunk.anchor,
       title: chunk.title,
-      score: Number(score.toFixed(4)),
-    };
-  });
-
-  return scoredSections.sort((a, b) => b.score - a.score).slice(0, topK);
+      score: Number(dotProduct(queryVector, chunk.vector).toFixed(4)),
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK);
 }
-
