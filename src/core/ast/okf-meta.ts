@@ -3,7 +3,16 @@ import { Type, type Static, type TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import { isObject, isString, omit, unique } from "radash";
 import { ensureArray, localIsoDate } from "../shared/markdown";
-import { distillMarkdownContent, parseMarkdownWithAST, type ConceptModeling } from "./distiller";
+import type { ConceptModeling } from "./distiller";
+
+let cachedDistillerModule: typeof import("./distiller") | null = null;
+
+async function getDistillerModule(): Promise<typeof import("./distiller")> {
+  if (!cachedDistillerModule) {
+    cachedDistillerModule = await import("./distiller");
+  }
+  return cachedDistillerModule;
+}
 
 // ==========================================
 // 1. OKF 通用公共字段 Schema 底座
@@ -503,7 +512,7 @@ export interface OKFConceptCardResult {
 /**
  * 通用 OKF v0.2 原子概念卡片提纯与结构化组合器
  */
-export function buildOKFConceptCard(options: BuildOKFConceptCardOptions): OKFConceptCardResult {
+export async function buildOKFConceptCard(options: BuildOKFConceptCardOptions): Promise<OKFConceptCardResult> {
   const {
     title,
     cleanContent,
@@ -519,6 +528,8 @@ export function buildOKFConceptCard(options: BuildOKFConceptCardOptions): OKFCon
     attachments = [],
     today = localIsoDate(),
   } = options;
+
+  const { parseMarkdownWithAST, distillMarkdownContent } = await getDistillerModule();
 
   let finalSummary = customSummary;
   if (!finalSummary) {

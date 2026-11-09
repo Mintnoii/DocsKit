@@ -1,10 +1,29 @@
-import { fromMarkdown } from "mdast-util-from-markdown";
-import { gfmFromMarkdown } from "mdast-util-gfm";
-import { gfm } from "micromark-extension-gfm";
-import { selectAll } from "unist-util-select";
+import { createRequire } from "node:module";
 import { isString, sift } from "radash";
 import type { Code, Heading, Table } from "mdast";
 import { outdent, parseMarkdownSafely, renderMarkdownTable } from "../shared/markdown";
+
+interface MdastDependencies {
+  readonly fromMarkdown: typeof import("mdast-util-from-markdown").fromMarkdown;
+  readonly gfmFromMarkdown: typeof import("mdast-util-gfm").gfmFromMarkdown;
+  readonly gfm: typeof import("micromark-extension-gfm").gfm;
+  readonly selectAll: typeof import("unist-util-select").selectAll;
+}
+
+let cachedMdastDeps: MdastDependencies | null = null;
+
+function getMdastDeps(): MdastDependencies {
+  if (!cachedMdastDeps) {
+    const req = createRequire(import.meta.url);
+    cachedMdastDeps = {
+      fromMarkdown: req("mdast-util-from-markdown").fromMarkdown,
+      gfmFromMarkdown: req("mdast-util-gfm").gfmFromMarkdown,
+      gfm: req("micromark-extension-gfm").gfm,
+      selectAll: req("unist-util-select").selectAll,
+    };
+  }
+  return cachedMdastDeps;
+}
 
 export type ConceptModeling = "ipo" | "decomposition" | "hybrid";
 
@@ -53,6 +72,7 @@ const titleOf = (content: string, heading: Heading): string =>
 /** MDAST 语义提取：章节切分、代码块/表格抽取与核心定义摘要提炼 */
 export function parseMarkdownWithAST(rawContent: string, defaultTitle: string): ParsedMarkdownAST {
   const { content } = parseMarkdownSafely(rawContent);
+  const { fromMarkdown, gfmFromMarkdown, gfm, selectAll } = getMdastDeps();
   const tree = fromMarkdown(content, {
     extensions: [gfm()],
     mdastExtensions: [gfmFromMarkdown()],

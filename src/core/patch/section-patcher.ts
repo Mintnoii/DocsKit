@@ -1,10 +1,29 @@
-import { fromMarkdown } from "mdast-util-from-markdown";
-import { gfmFromMarkdown } from "mdast-util-gfm";
-import { gfm } from "micromark-extension-gfm";
-import { selectAll } from "unist-util-select";
+import { createRequire } from "node:module";
 import { sift } from "radash";
 import type { Heading } from "mdast";
 import { outdent, parseMarkdownSafely } from "../shared/markdown";
+
+interface MdastDependencies {
+  readonly fromMarkdown: typeof import("mdast-util-from-markdown").fromMarkdown;
+  readonly gfmFromMarkdown: typeof import("mdast-util-gfm").gfmFromMarkdown;
+  readonly gfm: typeof import("micromark-extension-gfm").gfm;
+  readonly selectAll: typeof import("unist-util-select").selectAll;
+}
+
+let cachedMdastDeps: MdastDependencies | null = null;
+
+function getMdastDeps(): MdastDependencies {
+  if (!cachedMdastDeps) {
+    const req = createRequire(import.meta.url);
+    cachedMdastDeps = {
+      fromMarkdown: req("mdast-util-from-markdown").fromMarkdown,
+      gfmFromMarkdown: req("mdast-util-gfm").gfmFromMarkdown,
+      gfm: req("micromark-extension-gfm").gfm,
+      selectAll: req("unist-util-select").selectAll,
+    };
+  }
+  return cachedMdastDeps;
+}
 
 export interface SectionBlock {
   readonly title: string;
@@ -52,6 +71,7 @@ export function parseSections(markdown: string): SectionBlock[] {
   const { body } = parseMarkdownSafely(markdown);
   if (!body) return [];
 
+  const { fromMarkdown, gfmFromMarkdown, gfm, selectAll } = getMdastDeps();
   const tree = fromMarkdown(body, {
     extensions: [gfm()],
     mdastExtensions: [gfmFromMarkdown()],

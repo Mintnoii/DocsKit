@@ -1,4 +1,3 @@
-import { AutoTokenizer, AutoModel, env } from "@xenova/transformers";
 import os from "node:os";
 import fs from "node:fs";
 import { join } from "pathe";
@@ -6,7 +5,6 @@ import { dotProduct, normalizeVector } from "../shared/numeric";
 
 // 全机公共离线模型权重缓存：Ghost 与 TeamWiki 共享 ~/.cache/onnx-models
 const SHARED_CACHE_DIR = join(os.homedir(), ".cache", "onnx-models");
-env.localModelPath = SHARED_CACHE_DIR;
 
 const DEFAULT_MODEL = "Xenova/bge-small-zh-v1.5";
 /** 模型位置编码上限，单次送入的 token 硬上限 */
@@ -55,6 +53,8 @@ export async function getSharedEmbeddingModel(
   modelName = DEFAULT_MODEL
 ): Promise<{ tokenizer: TokenizerRuntime; model: ModelRuntime }> {
   if (!cachedTokenizer || !cachedModel) {
+    const { AutoTokenizer, AutoModel, env } = await import("@xenova/transformers");
+    env.localModelPath = SHARED_CACHE_DIR;
     if (fs.existsSync(join(SHARED_CACHE_DIR, modelName))) env.allowRemoteModels = false;
     cachedTokenizer = await AutoTokenizer.from_pretrained(modelName) as unknown as TokenizerRuntime;
     cachedModel = await AutoModel.from_pretrained(modelName) as unknown as ModelRuntime;

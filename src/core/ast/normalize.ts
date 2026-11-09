@@ -1,11 +1,30 @@
-import { fromMarkdown } from "mdast-util-from-markdown";
-import { gfmFromMarkdown } from "mdast-util-gfm";
-import { gfm } from "micromark-extension-gfm";
-import { selectAll } from "unist-util-select";
+import { createRequire } from "node:module";
 import { extname } from "pathe";
 import { isObject, isString, sift } from "radash";
 import type { Link, Root } from "mdast";
 import { ensureArray, outdent, parseMarkdownSafely, renderMarkdownTable } from "../shared/markdown";
+
+interface MdastDependencies {
+  readonly fromMarkdown: typeof import("mdast-util-from-markdown").fromMarkdown;
+  readonly gfmFromMarkdown: typeof import("mdast-util-gfm").gfmFromMarkdown;
+  readonly gfm: typeof import("micromark-extension-gfm").gfm;
+  readonly selectAll: typeof import("unist-util-select").selectAll;
+}
+
+let cachedMdastDeps: MdastDependencies | null = null;
+
+function getMdastDeps(): MdastDependencies {
+  if (!cachedMdastDeps) {
+    const req = createRequire(import.meta.url);
+    cachedMdastDeps = {
+      fromMarkdown: req("mdast-util-from-markdown").fromMarkdown,
+      gfmFromMarkdown: req("mdast-util-gfm").gfmFromMarkdown,
+      gfm: req("micromark-extension-gfm").gfm,
+      selectAll: req("unist-util-select").selectAll,
+    };
+  }
+  return cachedMdastDeps;
+}
 
 export interface MarkdownAttachment {
   readonly name: string;
@@ -60,6 +79,7 @@ export function normalizeMarkdownContent(
   const { data: frontmatter, content } = parseMarkdownSafely(rawMarkdown);
   const { preprocessedText, calloutsCount } = standardizeCallouts(content);
 
+  const { fromMarkdown, gfmFromMarkdown, gfm, selectAll } = getMdastDeps();
   const tree: Root = fromMarkdown(preprocessedText, {
     extensions: [gfm()],
     mdastExtensions: [gfmFromMarkdown()],
