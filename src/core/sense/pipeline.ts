@@ -1,4 +1,5 @@
 import { tryit, unique } from "radash";
+import crypto from "node:crypto";
 import {
   cleanTextForVector,
   buildNgramVocabulary,
@@ -6,7 +7,7 @@ import {
   cosineSimilarityVectors,
 } from "./ngram";
 import { rrfFuseScores } from "./rrf";
-import { createReranker, type RerankConfig } from "./reranker";
+import { createReranker, type RerankConfig, type RerankOutput } from "./reranker";
 
 export interface HybridSearchableDocument {
   id: string;
@@ -19,6 +20,8 @@ export interface HybridRerankState {
   readonly applied: boolean;
   readonly backend: string;
   readonly fallbackReason?: string;
+  /** 本次分数来自缓存而非实时模型调用 */
+  readonly cached?: boolean;
 }
 
 export interface HybridRankResult {
@@ -36,12 +39,57 @@ export interface HybridRankingPipelineOptions {
   rrfK?: number;
   candidateLimit?: number;
   rerank?: RerankConfig;
+  /** rerank 结果缓存开关，默认开启 */
+  rerankCache?: boolean;
 }
 
 const BM25_MIN_SCORE = 0.1;
 const VECTOR_MIN_SCORE = 0.2;
 const DEFAULT_RRF_K = 60;
 const DEFAULT_LIMIT = 10;
+const DEFAULT_RERANK_CACHE_LIMIT = 128;
+
+/**
+ * rerank 结果缓存（进程内）
+ *
+ * 同一 query 重复提问时，云端精排的往返开销不该重付。缓存键含候选集内容
+ * 哈希与后端标识，候选集或模型一变自然不命中。
+ *
+ * 只缓存 applied=true 的结果：降级分数是恒保序的假分数，缓存下来会
+ * 掩盖「模型没生效」这个事实。
+ */
+const rerankCache = new Map<string, RerankOutput>();
+const RERANK_CACHE_LIMIT = DEFAULT_RERANK_CACHE_LIMIT;
+
+/** 缓存键：归一化 query + 候选集内容 + 后端标识 + 模型名 */
+const buildRerankCacheKey = (
+  query: string,
+  items: ReadonlyArray<{ id: string; text: string }>,
+  backend: string,
+  model: string
+): string => {
+  const payload = items.map((item) => `${item.id}\u0000${item.text}`).join("\u0001");
+  const digest = crypto.createHash("sha256").update(payload).digest("hex");
+  return `${backend}|${model}|${query.trim().replace(/\s+/g, " ")}|${digest}`;
+};
+
+/** 读取缓存并顺带刷新插入序（LRU：命中后移到最新） */
+const readRerankCache = (key: string): RerankOutput | undefined => {
+  const hit = rerankCache.get(key);
+  if (!hit) return undefined;
+  rerankCache.delete(key);
+  rerankCache.set(key, hit);
+  return hit;
+};
+
+/** 写入缓存，超出容量上限时淘汰最旧一条 */
+const writeRerankCache = (key: string, output: RerankOutput): void => {
+  rerankCache.set(key, output);
+  if (rerankCache.size > RERANK_CACHE_LIMIT) {
+    const oldest = rerankCache.keys().next();
+    if (!oldest.done) rerankCache.delete(oldest.value);
+  }
+};
 
 /** 纯 TS 批量 N-Gram 稠密向量相似度打分 */
 export function rankDocumentsByNgramVector<T extends HybridSearchableDocument>(
@@ -111,29 +159,58 @@ export async function executeHybridRankPipeline<T extends HybridSearchableDocume
       return { id: item.id, text: doc ? `${doc.title}。${doc.searchBody}` : item.id };
     });
 
-    const [err, output] = await tryit(async () => reranker.rerank(query, rerankItems))();
-    if (err || !output) {
+    const cacheEnabled = options?.rerankCache !== false;
+    const cacheKey = cacheEnabled
+      ? buildRerankCacheKey(
+          query,
+          rerankItems,
+          reranker.backend,
+          options?.rerank?.model ?? "default"
+        )
+      : "";
+
+    const cachedOutput = cacheEnabled ? readRerankCache(cacheKey) : undefined;
+
+    if (cachedOutput) {
       rerankState = {
-        applied: false,
-        backend: reranker.backend,
-        fallbackReason: err?.message ?? "重排无结果",
+        applied: true,
+        backend: cachedOutput.backend,
+        cached: true,
       };
-      console.warn(`[Rerank] 执行异常: ${rerankState.fallbackReason}，保持 RRF 顺序`);
+      const scoreMap = new Map(cachedOutput.results.map((score) => [score.id, score.score]));
+      const head = sortedRRF
+        .slice(0, rerankLimit)
+        .map((item) => ({ ...item, rerankScore: scoreMap.get(item.id) }))
+        .sort((a, b) => (b.rerankScore ?? 0) - (a.rerankScore ?? 0));
+      const tail = sortedRRF.slice(rerankLimit);
+      sortedRRF = [...head, ...tail];
     } else {
-      rerankState = {
-        applied: output.applied,
-        backend: output.backend,
-        fallbackReason: output.fallbackReason,
-      };
-      // 仅在模型真正生效时重排；降级分数是恒保序的假分数，排序不得参与
-      if (output.applied) {
-        const scoreMap = new Map(output.results.map((score) => [score.id, score.score]));
-        const head = sortedRRF
-          .slice(0, rerankLimit)
-          .map((item) => ({ ...item, rerankScore: scoreMap.get(item.id) }))
-          .sort((a, b) => (b.rerankScore ?? 0) - (a.rerankScore ?? 0));
-        const tail = sortedRRF.slice(rerankLimit);
-        sortedRRF = [...head, ...tail];
+      const [err, output] = await tryit(async () => reranker.rerank(query, rerankItems))();
+      if (err || !output) {
+        rerankState = {
+          applied: false,
+          backend: reranker.backend,
+          fallbackReason: err?.message ?? "重排无结果",
+        };
+        console.warn(`[Rerank] 执行异常: ${rerankState.fallbackReason}，保持 RRF 顺序`);
+      } else {
+        rerankState = {
+          applied: output.applied,
+          backend: output.backend,
+          fallbackReason: output.fallbackReason,
+        };
+        // 仅在模型真正生效时重排；降级分数是恒保序的假分数，排序不得参与
+        if (output.applied) {
+          const scoreMap = new Map(output.results.map((score) => [score.id, score.score]));
+          const head = sortedRRF
+            .slice(0, rerankLimit)
+            .map((item) => ({ ...item, rerankScore: scoreMap.get(item.id) }))
+            .sort((a, b) => (b.rerankScore ?? 0) - (a.rerankScore ?? 0));
+          const tail = sortedRRF.slice(rerankLimit);
+          sortedRRF = [...head, ...tail];
+          // 只缓存模型真生效的结果，降级假分数禁止入缓存
+          if (cacheEnabled) writeRerankCache(cacheKey, output);
+        }
       }
     }
   }
