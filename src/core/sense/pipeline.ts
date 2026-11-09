@@ -28,6 +28,8 @@ export interface HybridRankResult {
   vectorRank?: number;
   /** 未启用 rerank 时为 undefined */
   rerank?: HybridRerankState;
+  /** rerank 真实相关度分数；未参与精排或未启用时为 undefined */
+  rerankScore?: number;
 }
 
 export interface HybridRankingPipelineOptions {
@@ -101,7 +103,10 @@ export async function executeHybridRankPipeline<T extends HybridSearchableDocume
 
   if (reranker) {
     const docMap = new Map(docs.map((doc) => [doc.id, doc]));
-    const rerankItems = sortedRRF.map((item) => {
+    // rerank.topK 真正生效：只对前 topK 条候选做 cross-encoder 精排，
+    // 未入池的候选保持 RRF 原序，避免精排视野过窄拖低召回质量
+    const rerankLimit = Math.min(options?.rerank?.topK ?? sortedRRF.length, sortedRRF.length);
+    const rerankItems = sortedRRF.slice(0, rerankLimit).map((item) => {
       const doc = docMap.get(item.id);
       return { id: item.id, text: doc ? `${doc.title}。${doc.searchBody}` : item.id };
     });
@@ -123,9 +128,12 @@ export async function executeHybridRankPipeline<T extends HybridSearchableDocume
       // 仅在模型真正生效时重排；降级分数是恒保序的假分数，排序不得参与
       if (output.applied) {
         const scoreMap = new Map(output.results.map((score) => [score.id, score.score]));
-        sortedRRF = [...sortedRRF].sort(
-          (a, b) => (scoreMap.get(b.id) ?? 0) - (scoreMap.get(a.id) ?? 0)
-        );
+        const head = sortedRRF
+          .slice(0, rerankLimit)
+          .map((item) => ({ ...item, rerankScore: scoreMap.get(item.id) }))
+          .sort((a, b) => (b.rerankScore ?? 0) - (a.rerankScore ?? 0));
+        const tail = sortedRRF.slice(rerankLimit);
+        sortedRRF = [...head, ...tail];
       }
     }
   }
