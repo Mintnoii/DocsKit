@@ -14,11 +14,20 @@ export interface HybridSearchableDocument {
   searchBody: string;
 }
 
+/** 重排真实生效状态，随结果一并回传，不靠 stderr 警告 */
+export interface HybridRerankState {
+  readonly applied: boolean;
+  readonly backend: string;
+  readonly fallbackReason?: string;
+}
+
 export interface HybridRankResult {
   id: string;
   rrfScore: number;
   bm25Rank?: number;
   vectorRank?: number;
+  /** 未启用 rerank 时为 undefined */
+  rerank?: HybridRerankState;
 }
 
 export interface HybridRankingPipelineOptions {
@@ -88,6 +97,8 @@ export async function executeHybridRankPipeline<T extends HybridSearchableDocume
     ? createReranker(options.rerank)
     : null;
 
+  let rerankState: HybridRerankState | undefined;
+
   if (reranker) {
     const docMap = new Map(docs.map((doc) => [doc.id, doc]));
     const rerankItems = sortedRRF.map((item) => {
@@ -95,16 +106,31 @@ export async function executeHybridRankPipeline<T extends HybridSearchableDocume
       return { id: item.id, text: doc ? `${doc.title}。${doc.searchBody}` : item.id };
     });
 
-    const [err, scores] = await tryit(async () => reranker.rerank(query, rerankItems))();
-    if (err || !scores) {
-      console.warn(`[Rerank] 执行异常: ${err?.message ?? "无结果"}，自动平滑降级至 RRF 顺序`);
+    const [err, output] = await tryit(async () => reranker.rerank(query, rerankItems))();
+    if (err || !output) {
+      rerankState = {
+        applied: false,
+        backend: reranker.backend,
+        fallbackReason: err?.message ?? "重排无结果",
+      };
+      console.warn(`[Rerank] 执行异常: ${rerankState.fallbackReason}，保持 RRF 顺序`);
     } else {
-      const scoreMap = new Map(scores.map((score) => [score.id, score.score]));
-      sortedRRF = [...sortedRRF].sort(
-        (a, b) => (scoreMap.get(b.id) ?? 0) - (scoreMap.get(a.id) ?? 0)
-      );
+      rerankState = {
+        applied: output.applied,
+        backend: output.backend,
+        fallbackReason: output.fallbackReason,
+      };
+      // 仅在模型真正生效时重排；降级分数是恒保序的假分数，排序不得参与
+      if (output.applied) {
+        const scoreMap = new Map(output.results.map((score) => [score.id, score.score]));
+        sortedRRF = [...sortedRRF].sort(
+          (a, b) => (scoreMap.get(b.id) ?? 0) - (scoreMap.get(a.id) ?? 0)
+        );
+      }
     }
   }
 
-  return sortedRRF.slice(0, limit);
+  return sortedRRF
+    .slice(0, limit)
+    .map((item) => (rerankState ? { ...item, rerank: rerankState } : item));
 }

@@ -9,6 +9,8 @@ const SHARED_CACHE_DIR = join(os.homedir(), ".cache", "onnx-models");
 env.localModelPath = SHARED_CACHE_DIR;
 
 const DEFAULT_MODEL = "Xenova/bge-small-zh-v1.5";
+/** 模型位置编码上限，单次送入的 token 硬上限 */
+const MAX_TOKENS = 512;
 const SPECIAL_TOKENS = new Set(["[CLS]", "[SEP]", "<s>", "</s>"]);
 
 export interface LateChunkSectionSpan {
@@ -60,12 +62,16 @@ export async function getSharedEmbeddingModel(
   return { tokenizer: cachedTokenizer, model: cachedModel };
 }
 
-/** 字符偏移量区间映射为 Token 下标区间（跳过特殊标记） */
+/**
+ * 字符偏移量区间映射为 Token 下标区间（跳过特殊标记）。
+ * 返回 null 表示该区间完全落在截断窗口之外，调用方必须退到独立编码，
+ * 不能回退到某个固定 token 池化，否则所有溢出章节会得出同一个向量。
+ */
 function mapCharOffsetsToTokenRange(
   charStart: number,
   charEnd: number,
   tokens: readonly string[]
-): [number, number] {
+): [number, number] | null {
   const { spans } = tokens.reduce<{
     cursor: number;
     spans: { index: number; start: number; end: number }[];
@@ -80,8 +86,9 @@ function mapCharOffsetsToTokenRange(
   );
 
   const covered = spans.filter((span) => span.end > charStart && span.start < charEnd);
-  const from = covered[0]?.index ?? 1;
-  const to = (covered.at(-1)?.index ?? Math.min(tokens.length - 2, from)) + 1;
+  if (covered.length === 0) return null;
+  const from = covered[0].index;
+  const to = covered[covered.length - 1].index + 1;
   return [from, Math.max(from + 1, Math.min(to, tokens.length))];
 }
 
@@ -107,9 +114,33 @@ function poolTokens(
   };
 }
 
+/** 对单段文本独立编码并做均值池化（溢出窗口章节的退路） */
+async function encodeStandalone(
+  text: string,
+  tokenizer: TokenizerRuntime,
+  model: ModelRuntime
+): Promise<number[]> {
+  const inputs = await tokenizer(text, { max_length: MAX_TOKENS, truncation: true });
+  const outputs = await model(inputs);
+  const state = outputs.last_hidden_state;
+  const [_batch, seqLen, hiddenDim] = state.dims;
+  const tokens = tokenizer.model.convert_ids_to_tokens(Array.from(inputs.input_ids.data));
+  const { mean } = poolTokens(
+    state.data,
+    hiddenDim,
+    seqLen,
+    tokens,
+    Array.from({ length: seqLen }, (_, idx) => idx)
+  );
+  return normalizeVector(mean);
+}
+
 /**
  * Late Chunking：整篇送入 Transformer 后按章节 Span 池化，
  * 章节向量天然浸润全文自注意力上下文。
+ *
+ * 单次编码上限 MAX_TOKENS，超出窗口的章节无法参与全文自注意力，
+ * 必须逐章节独立编码，否则会共享同一个固定 Token 池化向量（章节锚点变噪声）。
  */
 export async function computeLateChunking(
   fullText: string,
@@ -118,7 +149,7 @@ export async function computeLateChunking(
 ): Promise<LateChunkOutput> {
   const { tokenizer, model } = await getSharedEmbeddingModel(modelName);
 
-  const inputs = await tokenizer(fullText, { max_length: 512, truncation: true });
+  const inputs = await tokenizer(fullText, { max_length: MAX_TOKENS, truncation: true });
   const inputIds = Array.from(inputs.input_ids.data);
   const tokens = tokenizer.model.convert_ids_to_tokens(inputIds);
 
@@ -131,16 +162,37 @@ export async function computeLateChunking(
   const { mean: globalMean } = poolTokens(tensorData, hiddenDim, seqLen, tokens, allTokens);
   const docVector = normalizeVector(globalMean);
 
-  const chunks = sections.map((section): LateChunkItem => {
-    const [tFrom, tTo] = mapCharOffsetsToTokenRange(section.startOffset, section.endOffset, tokens);
-    const range = Array.from({ length: tTo - tFrom }, (_, idx) => tFrom + idx);
-    const pooled = poolTokens(tensorData, hiddenDim, seqLen, tokens, range);
-    return {
-      anchor: section.anchor,
-      title: section.title,
-      vector: normalizeVector(pooled.count > 0 ? pooled.mean : globalMean),
-    };
-  });
+  let overflowCount = 0;
+
+  const chunks = await Promise.all(
+    sections.map(async (section): Promise<LateChunkItem> => {
+      const range = mapCharOffsetsToTokenRange(section.startOffset, section.endOffset, tokens);
+
+      if (range) {
+        const [tFrom, tTo] = range;
+        const tokenRange = Array.from({ length: tTo - tFrom }, (_, idx) => tFrom + idx);
+        const pooled = poolTokens(tensorData, hiddenDim, seqLen, tokens, tokenRange);
+        return {
+          anchor: section.anchor,
+          title: section.title,
+          vector: normalizeVector(pooled.count > 0 ? pooled.mean : globalMean),
+        };
+      }
+
+      overflowCount++;
+      const sectionText = fullText.slice(section.startOffset, section.endOffset).trim();
+      const vector = sectionText
+        ? await encodeStandalone(sectionText, tokenizer, model)
+        : docVector;
+      return { anchor: section.anchor, title: section.title, vector };
+    })
+  );
+
+  if (overflowCount > 0) {
+    console.warn(
+      `[LateChunking] ${overflowCount}/${sections.length} 个章节超出 ${MAX_TOKENS} token 窗口，已改用独立编码（不含全文自注意力上下文）`
+    );
+  }
 
   return { docVector, chunks };
 }
