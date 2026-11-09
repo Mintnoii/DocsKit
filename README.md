@@ -8,6 +8,13 @@
 
 外部长文、团队方案、随手记的碎片进入知识库前，都要走清洗、幂等判定、章节对账、双链索引这几步。每个知识库各写一遍，代码很快分叉：行正则把代码块里的注释当成标题，Frontmatter 一变就把没改动的正文判成新素材，删掉的接口悄悄消失后没人知道要去哪查。DocsKit 把这些计算收成无状态纯函数，业务层只决定素材从哪来、卡片往哪放、检索结果怎么交给模型。
 
+## 环境要求
+
+- Node.js >= 20
+- pnpm（包管理器统一用 pnpm）
+- 安装时必须允许依赖的 install scripts：`@xenova/transformers` 依赖的 `sharp` 需要下载 libvips 原生二进制，跳过脚本会导致测试直接报 `Cannot find module '../build/Release/sharp-win32-x64.node'`
+- `docskit/sense` 的 Late Chunking 使用本地 ONNX 推理，首次运行会把 `Xenova/bge-small-zh-v1.5` 缓存到 `~/.cache/onnx-models`，需要一次网络访问
+
 ## 从源码开始
 
 ```bash
