@@ -60,7 +60,8 @@ DocsKit/
 │   │   │   ├── index.ts   # 底座统一导出
 │   │   │   ├── markdown.ts # parseMarkdownSafely / stringifyMarkdownSafely / outdent / renderMarkdownTable
 │   │   │   └── numeric.ts # N-gram 词表 / 余弦 / L2 归一化 / Bigram Dice
-│   │   ├── ast/           # 语法树解析、章节切块、清洗归一、OKF 元数据、文件扫描
+│   │   ├── ast/           # 语法树解析、章节切块、清洗归一、文件扫描
+│   │   ├── okf/           # OKF 元数据 Schema 契约（typebox 唯一承载处）
 │   │   ├── patch/         # 章节差量对账、废弃标记、四级级联去重门禁
 │   │   ├── snapshot/      # 快照路径、版本比对、URL 归一化与墓碑账本
 │   │   ├── sense/         # BM25、RRF、Late Chunking、Rerank、混合检索管道
@@ -87,6 +88,7 @@ DocsKit/
 | **前后引用关系图** | `docskit/graph` | `indexBidirectionalGraph`<br>`extractWikilinks`<br>`extractWikiOutboundLinks`<br>`countContentWords`<br>`normalizeWikilinkTarget` | 剥离代码围栏与行内代码精准提取 `[[双链]]` 并清洗锚点/扩展名；自动理清卡片间的双向 1-Hop 拓扑网，提供 CJK+Latin 统一字数统计。 |
 | **文档体检与重复排查** | `docskit/lint` | `auditDirectoryVault`<br>`lintVaultTopology`<br>`auditVaultLifecycle`<br>`loadVaultCardNodes`<br>`isProtectedPath`<br>`evaluateToolCallPathGuard`<br>`computeBigramDiceSimilarity`<br>`findHighSimilarityCardPairs`<br>`analyzeCardLifecycle` | 检查全库死链、孤立卡片与 OKF Schema 格式；提醒过期老卡与人工锁定保护；提供通用只读物理底座拦截门禁；基于 2-gram Dice 与归一化余弦点积计算全库卡片高相似度冗余对，给出合并建议。 |
 | **JIT 渐进装配** | `docskit/jit` | `formatAgentJITPrompt` | 提供符合 Karpathy LLM-Wiki 规范的三级装配上下文（指针+摘要 / 深度正文），自动嵌入 1-Hop 依赖与受影响下游，控制 Token 预算。 |
+| **OKF 元数据契约** | `docskit/okf` | `validateOKFMetadata`<br>`createOKFConceptMetadata`<br>`createOKFMetadata`<br>`updateOKFMetadata`<br>`buildOKFConceptCard`<br>`appendCardAttachments`<br>`OKFFrontmatterSchema` | 用 TypeBox 声明卡片 Frontmatter 的字段、枚举与必填约束，统一校验与生成；与 AST 解析分离，避免只做语法解析的调用方被迫加载 Schema 校验库。 |
 
 ---
 
@@ -98,6 +100,15 @@ DocsKit/
    - 通用引擎里的所有函数必须是通用的，文件路径、分类名字等由具体业务项目作为参数传进来，内核不绑死任何项目私有逻辑。
 3. **改动先在提案留档**：
    - 通用引擎要做重大改动或加新算法，先在 `DocsKit/openspec/changes/` 下记下方案并跑通测试，确认无误再供各项目使用。
+4. **消费方按需子路径导入**：
+   - 库消费方（Ghost、TeamWiki 的 `.pi/lib/` 与 `src/`）一律从 `docskit/<子路径>` 导入，**不得**从 `docskit` 根 barrel 导入。
+   - 根 barrel 对十一个核心模块做静态再导出，求值发生在模块加载期，与消费方实际用到哪些符号无关。根 barrel 实测 186 到 190 ms，`docskit/shared` 2 ms、`docskit/graph` 1 ms、`docskit/patch` 9 ms、`docskit/ast` 9 ms、`docskit/hash` 4 ms、`docskit/sense` 12 ms。
+   - 根 barrel 仅适用于脚本与工具入口（一次性执行、需全量符号可用）。
+   - 符号归属重叠时选实测耗时最低的子路径。`parseMarkdownSafely` 一批在 `ast` 与 `shared` 都有，一律走 `shared`。
+5. **重型依赖不得顶层静态引入**：
+   - `@xenova/transformers` 与 mdast 系包（`mdast-util-from-markdown` / `mdast-util-gfm` / `micromark-extension-gfm` / `unist-util-select`）严禁出现在任何文件的顶层静态 import。
+   - mdast 系包走 `createRequire(import.meta.url)` 惰性单例，保持导出函数的同步契约不变。transformers 走函数内动态 import，`env.localModelPath` 的共享缓存赋值随动态 import 一同搬移。
+   - 顶层静态引入 `@sinclair/typebox` 的文件只能待在 `src/core/okf/`，`src/core/ast/` 内零容忍。
 
 ---
 
