@@ -96,7 +96,11 @@ export async function readMarkdownFile<T = Record<string, unknown>>(
 
 // 正则 `/\n(?=##\s)/` 基于前瞻断言按二级标题行切分章节块，保留 ## 标记
 const splitH2Blocks = (markdown: string): readonly string[] => normalizeLf(markdown).split(/\n(?=##\s)/);
-const isH2Block = (block: string, keyword: string): boolean => block.startsWith("## ") && block.includes(keyword);
+// 仅匹配第一行标题是否包含目标关键词，避免章节内部正文词汇误伤判定
+const isH2Block = (block: string, keyword: string): boolean => {
+  const firstLine = block.split("\n")[0] ?? "";
+  return firstLine.startsWith("## ") && firstLine.includes(keyword);
+};
 
 /** 按二级标题剔除章节（## 为 Markdown 标题语法，非路径路由） */
 export function dropSection(markdown: string, targetKeyword: string): string {
@@ -119,13 +123,15 @@ export function hasWikiLink(markdown: string, relPath: string): boolean {
   return wikilinkTargets(markdown).some((target) => target === relPath || target === stem);
 }
 
-/** 判断指定章节（缺省回退全文）是否已收录该信源双链 */
+/** 判断指定章节（缺省回退信源相关常见标题）是否已收录该信源双链 */
 export function hasSourceLink(
   markdown: string,
   relPath: string,
-  sectionKeyword = "sources"
+  sectionKeywords: readonly string[] | string = ["sources", "关联信源", "信源"]
 ): boolean {
-  return hasWikiLink(extractSection(markdown, sectionKeyword) || markdown, relPath);
+  const keywords = Array.isArray(sectionKeywords) ? sectionKeywords : [sectionKeywords];
+  const section = keywords.map((kw) => extractSection(markdown, kw)).find((s) => s.length > 0);
+  return hasWikiLink(section || markdown, relPath);
 }
 
 // 匹配非标准 LaTeX 数学行内符号（如 `$\neq$`, `$\le$` 等），统一映射转义为干净 Unicode 符号
