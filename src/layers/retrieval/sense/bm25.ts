@@ -92,7 +92,7 @@ export class BM25Engine {
   }
 
   /** 执行 BM25 检索评分：累加命中 Token 的 IDF 权重并结合文档长度归一，按分数降序截取 */
-  public search(query: string, limit = POLICY.sense.bm25Limit): Array<{ id: string; score: number }> {
+  public search(query: string, limit: number = POLICY.sense.bm25Limit): Array<{ id: string; score: number }> {
     const scored = this.tokenize(query).flatMap((term) => {
       const posting = this.invertedIndex.get(term);
       if (!posting) return [];
