@@ -1,5 +1,9 @@
 // DocsKit 统一门面：只做扁平导出，供一次性脚本与工具入口使用。业务代码一律走 docskit/<子路径>。
 
+import { enableCompileCache } from "node:module";
+
+// Node.js 22.8+ 原生 V8 编译缓存安全探测与激活（优雅降级，非 Node/旧环境静默跳过）
+enableCompileCache?.();
 
 export * from "./contracts/markdown";
 export * from "./foundation/numeric";

@@ -1,32 +1,49 @@
 # DocsKit
 
-[![npm](https://img.shields.io/badge/npm-docskit-cb3837)](https://www.npmjs.com/package/docskit)
-[![license](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![types](https://img.shields.io/badge/types-TypeScript-3178C6)](./package.json)
+### 面向编译型个人知识库与团队知识中枢的通用计算引擎
+**Compile-over-Retrieval Engine for Agentic Knowledge Bases & Wikis**
 
-把编译型知识库的通用计算做成纯 TypeScript 函数库。
+[![npm](https://img.shields.io/badge/npm-docskit-cb3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/docskit)
+[![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)](./LICENSE)
+[![types](https://img.shields.io/badge/types-TypeScript_Strict-3178C6?style=flat-square&logo=typescript)](./package.json)
+[![node](https://img.shields.io/badge/node->=20-339933?style=flat-square&logo=node.js)](https://nodejs.org/)
+[![tested with](https://img.shields.io/badge/tested_with-node:test-43853d?style=flat-square)](./tests/)
 
-外部长文、团队方案、随手记的碎片进入知识库前，都要走清洗、幂等判定、章节对账、双链索引这几步。每个知识库各写一遍，代码很快分叉：行正则把代码块里的注释当成标题，Frontmatter 一变就把没改动的正文判成新素材，删掉的接口悄悄消失后没人知道要去哪查。DocsKit 把这些计算收成无状态纯函数，业务层只决定素材从哪来、卡片往哪放、检索结果怎么交给模型。
+[核心定位](#-核心定位与解决的核心痛点) • [快速开始](#-快速开始) • [双轨编译架构](#-双轨编译与数据流转模型) • [检索供给链](#-检索供给链与倒排持久化) • [能力矩阵](#-能力一览-14-个原子子路径) • [搭建指南](#-搭建两种经典知识库模式)
 
-## 环境要求
+---
 
-- Node.js >= 20
-- pnpm（包管理器统一用 pnpm）
-- 安装时必须允许依赖的 install scripts：`@xenova/transformers` 依赖的 `sharp` 需要下载 libvips 原生二进制，跳过脚本会导致测试直接报 `Cannot find module '../build/Release/sharp-win32-x64.node'`
-- `docskit/sense` 的 Late Chunking 使用本地 ONNX 推理，首次运行会把 `Xenova/bge-small-zh-v1.5` 缓存到 `~/.cache/onnx-models`，需要一次网络访问
+## 💡 核心定位与解决的核心痛点
 
-## 从源码开始
+在构建面向 LLM Agent 的知识库或数字花园时，知识管理通常面临两类关键工程挑战：
+1. **上下文碎片化**：若未经语法与结构提纯，长篇文档被简单切分后容易导致逻辑撕裂，检索出的片段缺乏完整的机制阐述；
+2. **文档脆弱性与代码分叉**：不同知识项目往往自行手写正则去增删替换 Markdown。简单的行正则容易误把代码块内的注释判定为标题，元数据格式微调容易引发正文重复写入，而历史废弃的接口在文档更新后缺乏显式警示。
+
+**DocsKit 将复杂的文档处理下沉为标准化的编译流水线：**
+- **入库编译，结构化提纯**：素材进入知识库前，基于 AST 语法树完成章节级差量对账与提纯，保留已有知识主干，变更与废弃接口自动打上警示标记；
+- **纯函数无状态计算**：底层均为无副作用的纯计算函数与门禁，业务层仅需关注数据源与目标路径，计算逻辑高度解耦；
+- **纯本地轻量运行**：底层基于人类可读的 Markdown 文件与本地轻量特征文件，不依赖重型外部数据库集群，离线亦可秒级运行；
+- **全机模型缓存共享**：向量特征计算统一采用轻量级模型，同机多项目共享本地缓存，避免重复开销。
+
+---
+
+## ⚡ 快速开始
+
+### 安装与环境要求
+
+- **Node.js** >= 20（推荐 Node 22+ 享受原生 V8 编译缓存）
+- **包管理器**：推荐使用 `pnpm`
 
 ```bash
+# 从源码构建
 pnpm install
 pnpm build
 ```
 
-产物在 `dist/`，ESM 与 `.d.ts` 同时产出。项目只发 ESM，包管理器统一用 pnpm。发布到 npm 后可改为 `pnpm add docskit`。
+> [!NOTE]
+> `docskit/sense` 的 Late Chunking 基于本地 ONNX 推理，首次运行会将轻量模型（`Xenova/bge-small-zh-v1.5`）自动缓存至 `~/.cache/onnx-models`。
 
-示例按发布包的子路径写。源码按层放在 `src/foundation/` 与 `src/layers/` 下，物理路径与子路径的映射见 `AGENTS.md` 目录结构，`package.json exports` 的十四个子路径保持按能力命名不变。`tests/vault-recipes.test.ts` 属于一次性脚本入口，从 `../src/index` 根 barrel 引入，按 `AGENTS.md` 属豁免范围。
-
-## 快速开始
+### 极简调用示例
 
 ```ts
 import { buildSnapshotPath } from "docskit/snapshot";
@@ -38,113 +55,180 @@ const raw = `## 背景
 首屏渲染慢。
 
 ## 方案
-引入流式渲染。
+引入流式服务端渲染。
 `;
 
-// 原始素材落到只读底座，位置稳定且不允许回写
+// 1. 原始素材路由至只读底座，确保信源不可变
 const snapshot = buildSnapshotPath({ category: "articles", title: "流式渲染", revision: 1 });
-console.log(snapshot);              // _raw/articles/流式渲染-rev1.md
-console.log(isProtectedPath(snapshot)); // true
+console.log(snapshot);                 // _raw/articles/流式渲染-rev1.md
+console.log(isProtectedPath(snapshot)); // true (自动识别受保护底座)
 
-// 纯正文指纹没变就短路，省掉一次模型调用
+// 2. 纯正文指纹校验：内容未变即秒级 0-Token 短路，省掉模型调用开销
 const knownHashes = new Set<string>();
 const gate = checkContentIdempotency(raw, knownHashes);
+
 if (!gate.shouldSkip) {
+  // 3. 声明式编译流水线：抽取 IPO 核心机制并封装 YAML Frontmatter
   const result = await runPipeline(raw, {
     title: "流式渲染",
     compileMode: "distill",
     modeling: "ipo",
   });
+
   console.log(result.action);       // DISTILLED
-  console.log(result.fullMarkdown); // 带 YAML Frontmatter 的完整卡片
+  console.log(result.fullMarkdown); // 带标准 YAML 标量头与结构的常青卡片
 }
 ```
 
-`runPipeline` 还支持 `patch`（按 MDAST 章节增量合并，旧卡片元数据原样保留）与 `passThrough`（清洗后直通）。完整配方见 `docs/BUILDING-VAULTS.md`，文中两段示例在 `tests/vault-recipes.test.ts` 有对应断言。
+---
 
-## 能力一览
+## 🏗️ 双轨编译与数据流转模型
 
-十四个能力子路径与 `package.json exports`、`tsup.config.ts` entry 一一对账，外加一个 `./package.json` 元入口。每个函数只有一个权威子路径，能力模块不再重导出别处的符号。
+DocsKit 绝不是简单的文本字符串正则查找替换，而是**入库即结构化、内存全对象化计算、出库统一安全序列化**的双轨编译管道：
 
-| 子路径 | 关键函数 | 职责 |
-| :--- | :--- | :--- |
-| `docskit/markdown` | `parseMarkdownSafely`、`stringifyMarkdownSafely`、`renderMarkdownTable`、`outdent`、`normalizeReadableTitle`、`collapseWhitespace`、`splitLines`、`stripMarkdownExtension` | 全库唯一的 Frontmatter、排版与章节函数底座 |
-| `docskit/numeric` | `cosineSimilarityVectors`、`computeTextNgramSimilarity`、`computeBigramDiceSimilarity`、`normalizeVector` | 全库唯一的字符相似度与向量数值实现 |
-| `docskit/ast` | `normalizeMarkdownContent`、`parseMarkdownWithAST`、`distillMarkdownContent`、`getMarkdownFiles` | 语法树解析、内容清洗、核心提炼、文件扫描 |
-| `docskit/okf` | `createOKFMetadata`、`validateOKFMetadata`、`buildOKFConceptCard`、`OKFFrontmatterSchema` | 卡片 Frontmatter 契约、校验、生成与附件组装 |
-| `docskit/patch` | `diffDocumentSections`、`applySectionPatch`、`evaluateDedupGate`、`findMostSimilarVector` | 章节差量对账、废弃声明注入、四级级联去重 |
-| `docskit/snapshot` | `buildSnapshotPath`、`parseSnapshotMeta`、`isVersionNewer`、`sanitizeFileName`、`isTombstoneHit`、`resolveCardPathCollision` | 快照路径、版本对账、文件名清洗、低质素材特征防重 |
-| `docskit/sense` | `BM25Engine`、`computeLateChunking`、`rrfFuseScores`、`executeHybridRankPipeline`、`createReranker`、`rankDocumentsByNgramVector` | 词项精确检索、章节级向量、多路召回融合与重排 |
-| `docskit/graph` | `extractWikilinks`、`extractWikiOutboundLinks`、`indexBidirectionalGraph`、`normalizeWikilinkTarget`、`stripAnchor`、`stripAlias` | 双链提取、目标归一与双向 1-Hop 拓扑图 |
-| `docskit/lint` | `lintVaultTopology`、`auditDirectoryVault`、`isProtectedPath`、`evaluateToolCallPathGuard`、`analyzeCardLifecycle`、`findHighSimilarityCardPairs`、`auditSupersedeChain`、`checkTitleStemConsistency` | 断链与 Schema 巡检、只读底座守护、过期卡片与重复卡片排查 |
-| `docskit/hash` | `computeMarkdownBodyHash`、`calcRawContentSha256`、`checkContentIdempotency`、`computeShortHash`、`computeSha256Hex` | 纯正文指纹、素材哈希与 0-Token 幂等短路 |
-| `docskit/evidence` | `splitAnchorableParagraphs`、`buildSourceRefs`、`verifySourceRef`、`checkClaimCoverage`、`mechanicalClaim` | 段落级证据锚点、确定性选段与指纹复算、声明句覆盖校验 |
-| `docskit/presets` | `ZH_CN_DISTILL_OPTIONS`、`ZH_CN_NORMALIZE_TEXTS`、`ZH_CN_JIT_RENDERER`、`ZH_CN_SECTION_TEXTS`、`ZH_CN_LABELS` | 五个聚合入口，卡片模板、附件清单、提示词和废弃声明一次注入 |
-| `docskit/jit` | `formatAgentJITPrompt` | 面向 Coding Agent 的渐进式上下文装配 |
-| `docskit/pipeline` | `runPipeline` | 清洗、门禁、编译、元数据组装四阶段编排 |
+```mermaid
+flowchart TD
+    MD["原始 Markdown 文件\n(Frontmatter + Body)"] --> S0["parseMarkdownSafely\n(docskit/markdown)"]
 
-## 两种知识库怎么搭
+    subgraph S1["第一性解构 (内存 POJO / AST)"]
+        S0 --> FM["Frontmatter: Record<string, unknown>\n(YAML 1.2 工业级标量解析)"]
+        S0 --> BODY["纯正文文本 Body (抹平 CRLF)"]
+        BODY --> AST["MDAST 语法树节点\n(fromMarkdown / GFM)"]
+        AST --> SECS["章节块数组 SectionBlock[]\n{ title, level, content, rawText }"]
+        BODY --> ANCHORS["证据段落 AnchorParagraph[]\n{ anchor, headingPath, hash }"]
+    end
 
-个人知识库的素材多为一次性长文与碎片，主链路走提炼，概念之间靠去重门禁防止同义碎片化。团队知识库的方案按修订号反复同步，主链路走增量合并，删掉的接口要留在卡片里并打上废弃声明，人工拍板的卡片不许被自动覆盖。
+    subgraph S2["纯函数内存比对与合并 (零字符盲拼)"]
+        FM --> OKF_META["updateOKFMetadata\nTypeBox 强校验与集合幂等合并"]
+        SECS --> PATCH_DIFF["diffDocumentSections\n章节对账与已删接口废弃预警"]
+        ANCHORS --> EVIDENCE_GATE["checkClaimCoverage\n2-Gram 覆盖率与指纹双向复算"]
+    end
 
-两条链路用的是同一批函数，差别集中在 `compileMode`、版本判定、删除处理与元数据来源。`docs/BUILDING-VAULTS.md` 给出两份完整可运行的配方、差异对照表和交付前自检清单。
+    subgraph S3["最终装配与安全落盘"]
+        OKF_META --> ASSEMBLE["卡片整体装配 (IPO / 步骤拆解)"]
+        PATCH_DIFF --> ASSEMBLE
+        EVIDENCE_GATE --> ASSEMBLE
+        ASSEMBLE --> SER["stringifyMarkdownSafely\n(规范序列化 Frontmatter + 正文)"]
+        SER --> DISK["物理常青卡片落盘 (.md)"]
+    end
+```
 
-## 下游契约怎么扩
+---
 
-`docskit/okf` 提供 OKF v0.2 的通用字段基线，下游在这份基线上扩自己的字段，引擎不写死业务治理语义。TeamWiki 已扩到 OKF v0.3，多了段落级来源锚点、声明句、责任链与演化链字段；Ghost 另加 `title === stem` 的身份不变量。这些扩展由各项目自己的 Schema 与巡检命令承担，边界与字段清单见 `docs/OKF-v0.2-SPECIFICATION.md` 末节。
+## 🔍 检索供给链与倒排持久化
 
-五类确定性计算已经收进通用引擎。证据链在 `docskit/evidence`，演化链与身份巡检在 `docskit/lint`，路径仲裁在 `docskit/snapshot`，标题规范化在 `docskit/markdown`，短哈希在 `docskit/hash`。字段形状、模型判定、台账与签字命令仍留在业务层，配方接法见 `docs/BUILDING-VAULTS.md`。
+针对 AI Agent 与 RAG 的高频交互，DocsKit 提供 **BM25 词项检索 + 章节级 Late Chunking 高精度局部向量 + Cross-Encoder 重排** 的混合检索管道，并原生支持**零依赖持久化**：
 
-## 引擎纯度与业务预设
+```mermaid
+flowchart LR
+    subgraph Offline["构建期：零成本持久化"]
+        CARDS["全量知识库卡片"] --> BM25_BUILD["BM25Engine.addDocument\n(驼峰拆解 + 中文 2-Gram)"]
+        BM25_BUILD --> DUMP["engine.exportIndex()\n(导出为 JSON 纯数据结构)"]
+        DUMP --> DISK_JSON["wiki/meta/bm25-index.json"]
+    end
 
-`src/contracts/`、`src/foundation/` 与 `src/layers/` 下的方法体不写业务语言。渲染类函数默认输出只由输入数据组成的结构骨架，诊断类返回值默认给结构化 code，阈值与权重集中在 `src/contracts/policy.ts` 的冻结表。原中文卡片模板、附件附录、JIT 提示词与废弃声明全部收在 `docskit/presets`，调用方按需注入。
+    subgraph Online["运行时：毫秒级冷启动与多路召回"]
+        DISK_JSON --> RESTORE["BM25Engine.fromIndex(json)\n(零分词、毫秒直接还原 Map)"]
+        RESTORE --> BM25_SEARCH["BM25 稀疏检索"]
+        QUERY["检索 Query"] --> BM25_SEARCH
+        QUERY --> LC_SEARCH["Late Chunking 局部高精向量"]
+        BM25_SEARCH --> RRF["SIGIR 倒数秩融合 (rrfFuseScores)"]
+        LC_SEARCH --> RRF
+        RRF --> RERANK["Cross-Encoder 精排\n(进程内 LRU 缓存保障)"]
+        RERANK --> TOP_CARDS["最终精准定位章节与卡片"]
+    end
+```
+
+### 倒排索引持久化代码手势
 
 ```ts
-import { distillMarkdownContent } from "docskit/ast";
-import { ZH_CN_DISTILL_OPTIONS } from "docskit/presets";
-import { runPipeline } from "docskit/pipeline";
+import { BM25Engine } from "docskit/sense";
 
-const card = distillMarkdownContent(raw, title, ZH_CN_DISTILL_OPTIONS);
-const result = await runPipeline(raw, {
-  title,
-  compileMode: "distill",
-  texts: { distill: ZH_CN_DISTILL_OPTIONS },
-});
+// 1. 构建期：建完索引直接落盘（0 新依赖，纯原生 JSON）
+const engine = new BM25Engine();
+cards.forEach(card => engine.addDocument(card.id, card.body));
+await fs.writeFile("wiki/meta/bm25.json", JSON.stringify(engine.exportIndex()));
+
+// 2. 运行时：直接反序列化，秒级还原！无需重新遍历上百张卡片与分词
+const serialized = JSON.parse(await fs.readFile("wiki/meta/bm25.json", "utf8"));
+const fastEngine = BM25Engine.fromIndex(serialized);
+const results = fastEngine.search("TypeScript 架构", 5);
 ```
 
-不注入时输出是中性结构，注入后得到这套中文模板，和旧版快照不再逐字相同。纯计算类函数（哈希、相似度、段落锚点、路径仲裁、演化链判定）无论是否注入，结果都不变。策略数值可以逐项覆盖，默认值见 `src/contracts/policy.ts`。
+---
 
-## 设计约束
+## 📦 能力一览 (14 个原子子路径)
 
-这些约束约束的是内核本身，业务层可以自由组合。
+DocsKit 遵循细粒度按需导入原则，消费方直接从 `docskit/<子路径>` 引入，Tree-Shaking 极佳。每个符号具有全仓唯一的权威子路径。
 
-- 内核不写死任何具体工程名或目录名，需要过滤时由调用方通过参数传入。
-- Frontmatter 读写、表格排版、字符相似度各只有一份实现，业务模块只消费不重写。
-- `src/contracts/`、`src/foundation/` 与 `src/layers/` 全部是无状态纯函数，可单独 import；`src/layers/compile/pipeline/` 才负责按配置编排。
-- 元数据里的评估字段由上游模型显式给定，代码不写死默认值。
-- 公开子路径与构建 entry 一一对账，新增函数只需在所属模块导出一次。
-- 消费方按 `docskit/<子路径>` 导入，根 barrel 只留给一次性脚本与工具入口，每个符号只有一个权威子路径。
-- 包标记 `sideEffects: false`，`exports` 显式带 `./package.json`，打包器可安全剪枝。
-- `src/contracts/`、`src/foundation/` 与 `src/layers/` 零业务中文，模板与诊断句子走 `docskit/presets` 注入。
-- 策略数值只在 `contracts/policy.ts` 声明，方法体不写字面量默认值。
+| 子路径 | 核心对外函数 | 解决的核心问题（白话说明） |
+| :--- | :--- | :--- |
+| **`docskit/markdown`** | `parseMarkdownSafely`<br>`stringifyMarkdownSafely`<br>`renderMarkdownTable`<br>`outdent`<br>`normalizeReadableTitle`<br>`collapseWhitespace`<br>`splitLines`<br>`stripMarkdownExtension` | **全库唯一 Frontmatter 与排版底座**。<br>接管 YAML 1.2 标量引擎，杜绝路径斜杠引发的崩溃；提供声明式表格渲染与可读标题规范化。 |
+| **`docskit/numeric`** | `cosineSimilarityVectors`<br>`computeTextNgramSimilarity`<br>`computeBigramDiceSimilarity`<br>`normalizeVector` | **全库唯一数值计算底座**。<br>收敛字符级 N-gram、余弦距离、L2 归一化与 2-gram Dice，杜绝同名概念多套数值结果。 |
+| **`docskit/hash`** | `computeMarkdownBodyHash`<br>`calcRawContentSha256`<br>`checkContentIdempotency`<br>`computeShortHash`<br>`computeSha256Hex` | **哈希与 0-Token 幂等门禁**。<br>抹平换行符后计算纯文本与正文 SHA-256，在 LLM 调用前提供 $O(1)$ 纯内存幂等短路。 |
+| **`docskit/ast`** | `normalizeMarkdownContent`<br>`parseMarkdownWithAST`<br>`distillMarkdownContent`<br>`getMarkdownFiles` | **语法树解析与章节切块**。<br>基于 MDAST 提纯文章结构，杜绝代码注释和表格被粗暴截断；基于 `fdir` 提供毫秒级文件扫描。 |
+| **`docskit/patch`** | `diffDocumentSections`<br>`applySectionPatch`<br>`evaluateDedupGate`<br>`findFuzzyLexicalMatch`<br>`findMostSimilarVector` | **修改合并与级联去重**。<br>文档改动时章节比对合并，已删接口打废弃警告；内置长度比率、Fuse.js、向量余弦与字符级四级去重防线。 |
+| **`docskit/snapshot`** | `buildSnapshotPath`<br>`parseSnapshotMeta`<br>`isVersionNewer`<br>`sanitizeFileName`<br>`isTombstoneHit`<br>`resolveCardPathCollision` | **快照路径与防重墓碑**。<br>声明式解构分类、标题与版本；提供跨平台文件名清洗、并存卡片路径仲裁与放弃素材墓碑阻断。 |
+| **`docskit/sense`** | `BM25Engine`<br>`computeLateChunking`<br>`rrfFuseScores`<br>`executeHybridRankPipeline`<br>`createReranker` | **混合检索与持久化索引**。<br>驼峰+中文 2-Gram 稀疏检索；支持倒排表 JSON 序列化持久化；提供 Late Chunking 与 Cross-Encoder 重排。 |
+| **`docskit/graph`** | `extractWikilinks`<br>`extractWikiOutboundLinks`<br>`indexBidirectionalGraph`<br>`normalizeWikilinkTarget`<br>`stripAnchor`<br>`stripAlias`<br>`countContentWords` | **引用图谱与中英字数统计**。<br>剥离代码围栏精准提取 `[[双链]]`；自动编织卡片间的双向 1-Hop 拓扑图，提供 CJK+Latin 统一字数统计。 |
+| **`docskit/lint`** | `lintVaultTopology`<br>`auditDirectoryVault`<br>`isProtectedPath`<br>`evaluateToolCallPathGuard`<br>`auditVaultLifecycle`<br>`findHighSimilarityCardPairs`<br>`auditSupersedeChain`<br>`checkTitleStemConsistency` | **文档巡检与物理底座守护**。<br>全库死链、孤岛与 OKF Schema 巡检；提供 Agent 工具调用只读目录拦截；提供陈旧卡片与重复卡片排查。 |
+| **`docskit/evidence`** | `splitAnchorableParagraphs`<br>`buildSourceRefs`<br>`verifySourceRef`<br>`checkClaimCoverage`<br>`mechanicalClaim` | **证据链与声明句覆盖校验**。<br>段落级锚点确定性切分与短哈希指纹复算；结论句 2-Gram 覆盖校验，不达标退回机械首句。 |
+| **`docskit/presets`** | `ZH_CN_DISTILL_OPTIONS`<br>`ZH_CN_NORMALIZE_TEXTS`<br>`ZH_CN_JIT_RENDERER`<br>`ZH_CN_SECTION_TEXTS`<br>`ZH_CN_LABELS` | **可选中文业务预设**。<br>提供 IPO 建模模板、附件清单、JIT 提示词与废弃声明，保持引擎层 100% 零业务中文纯度。 |
+| **`docskit/jit`** | `formatAgentJITPrompt` | **JIT 上下文渐进装配**。<br>提供符合 Karpathy LLM-Wiki 规范的三级装配上下文（指针+摘要 / 深度正文），严格控制 Token 预算。 |
+| **`docskit/okf`** | `createOKFMetadata`<br>`validateOKFMetadata`<br>`updateOKFMetadata`<br>`buildOKFConceptCard`<br>`OKFFrontmatterSchema` | **OKF 元数据契约**。<br>基于 TypeBox 声明卡片 Frontmatter 的字段、枚举与强校验规则，支持增量补丁合并与集合去重。 |
+| **`docskit/pipeline`** | `runPipeline` | **四阶段编译流水线**。<br>将清洗、门禁、提纯对账、元数据封装等各阶段串联为开箱即用的声明式编译引擎。 |
 
-## 开发
+---
+
+## 📚 搭建两种经典知识库模式
+
+DocsKit 用同一套通用函数同时支撑两种不同组织哲学的知识系统：
+
+```
+                    ┌─── 个人原子知识库 (提纯型) ───> 提炼机制主干、防同义碎片化、高信噪比常青卡片
+DocsKit 通用计算引擎 ┤
+                    └─── 团队方案知识库 (对账型) ───> 版本增量对账、废弃接口警示、责任链与演化链
+```
+
+- **个人原子知识库（提纯型）**：素材多为外部深度长文与思考碎片。主链路走 `distill`（IPO 机制建模抽取），配合级联去重门禁避免将同一概念存为多张碎片卡片。
+- **团队方案知识库（对账型）**：方案按修订版本反复同步。主链路走 `patch`（章节差量合并），保留已有卡片正文，若检测到接口删除自动在卡片注入废弃警告，且人工审定卡片（`lock: human`）具备强写入保护。
+
+> 📖 **可运行的端到端搭建配方**：完整代码示例、差异对照表与交付前自检清单详见 [`docs/BUILDING-VAULTS.md`](docs/BUILDING-VAULTS.md)。
+
+---
+
+## 🛡️ 架构约束与编码审美
+
+本库自身即全机「编译型知识库通用引擎」的架构标杆：
+1. **引擎零业务偏见**：通用函数不写死任何特定目录或项目私有字段，需要过滤时一律由业务层传参；
+2. **引擎方法体零业务中文**：`contracts/`、`foundation/`、`layers/` 内部方法体零中文，文案与模板一律收敛至 `presets/`；
+3. **策略数值单一真理源**：阈值、权重、上限集中在 [`src/contracts/policy.ts`](src/contracts/policy.ts) 冻结表，禁止在业务方法体手写魔法数字；
+4. **库优先于手搓**：路径一律 `pathe`，模式匹配一律 `picomatch`，集合变换一律 `radash`，Schema 一律 `typebox`，杜绝过程式 `for` 游标、天书捕获正则与非空断言；
+5. **Node 原生编译加速**：统一门面集成 Node 22+ `module.enableCompileCache()`，零依赖享受 V8 编译磁盘缓存。
+
+---
+
+## 🧪 本地开发与质量验证
 
 ```bash
-pnpm typecheck   # TypeScript 严格模式检查
-pnpm test        # node:test，含配方与回归用例
-pnpm build       # tsup 产出 ESM 与声明文件
+pnpm typecheck   # TypeScript 严格类型检查 (0 error 门禁)
+pnpm test        # node:test 原生测试套件 (72/72 全绿)
+pnpm build       # tsup 构建 ESM 模块与高纯度 .d.ts 声明
 ```
 
-改动先在 `openspec/changes/` 留方案并跑通测试，再合入内核。贡献规范与目录契约见 `AGENTS.md`。
+DocsKit 遵循规约驱动开发（OpenSpec），所有重大架构调整、数值变动与新特性均在 `openspec/changes/` 下立项、设计并完成验收。
 
-## 文档
+---
 
-- [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) 能力与四阶段分层
-- [`docs/BUILDING-VAULTS.md`](docs/BUILDING-VAULTS.md) 用 DocsKit 搭建知识库的可运行配方
-- [`docs/OKF-v0.2-SPECIFICATION.md`](docs/OKF-v0.2-SPECIFICATION.md) 通用卡片契约与下游扩展边界
-- [`AGENTS.md`](AGENTS.md) 跨 Agent 工程契约
+## 📄 扩展与进阶文档
 
-## 许可证
+- [分层能力路线图与四阶段编排 (`docs/CAPABILITIES.md`)](docs/CAPABILITIES.md)
+- [编译型知识库搭建指南与配方 (`docs/BUILDING-VAULTS.md`)](docs/BUILDING-VAULTS.md)
+- [OKF v0.2 卡片元数据规范与下游扩展 (`docs/OKF-v0.2-SPECIFICATION.md`)](docs/OKF-v0.2-SPECIFICATION.md)
+- [DocsKit 跨 Agent 唯一开发宪法 (`AGENTS.md`)](AGENTS.md)
 
-[MIT](./LICENSE)
+---
+
+## 📜 开源协议
+
+本项目采用 [MIT 许可证](./LICENSE) 开源。

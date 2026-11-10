@@ -8,6 +8,17 @@ export interface BM25Doc {
   length: number;
 }
 
+/** 可安全进行 JSON.stringify 导出的纯数据序列化索引结构体 */
+export interface BM25SerializedIndex {
+  readonly version: 1;
+  readonly k1: number;
+  readonly b: number;
+  readonly avgdl: number;
+  readonly docCount: number;
+  readonly docs: readonly (readonly [string, BM25Doc])[];
+  readonly invertedIndex: readonly (readonly [string, readonly (readonly [string, number])[]])[];
+}
+
 /** 匹配代码中的标识符/变量名/错误码，包含下划线、短横线与 $ 符 */
 const CODE_WORD = /[a-zA-Z0-9_\-\$]+/g;
 
@@ -22,7 +33,10 @@ export class BM25Engine {
   private avgdl = 0;
   private docCount = 0;
 
-  constructor(private readonly k1 = POLICY.sense.bm25K1, private readonly b = POLICY.sense.bm25B) {}
+  constructor(
+    private readonly k1: number = POLICY.sense.bm25K1,
+    private readonly b: number = POLICY.sense.bm25B
+  ) {}
 
   /** 文本分词器：代码按驼峰与分隔符拆解，中文按单字与相邻 2-gram 提取 */
   public tokenize(text: string): string[] {
@@ -96,5 +110,50 @@ export class BM25Engine {
       .map(([id, entries]) => ({ id, score: sum(entries ?? [], (entry) => entry.score) }));
 
     return sort(ranked, (entry) => entry.score, true).slice(0, limit);
+  }
+
+  /**
+   * 将当前倒排索引状态完整导出为 JSON-Safe 纯结构体，供落盘持久化
+   */
+  public exportIndex(): BM25SerializedIndex {
+    return {
+      version: 1,
+      k1: this.k1,
+      b: this.b,
+      avgdl: this.avgdl,
+      docCount: this.docCount,
+      docs: [...this.docs.entries()],
+      invertedIndex: [...this.invertedIndex.entries()].map(([term, postings]) => [
+        term,
+        [...postings.entries()],
+      ]),
+    };
+  }
+
+  /**
+   * 从已导出的序列化结构体恢复当前引擎状态，清空瞬态缓存
+   */
+  public importIndex(serialized: BM25SerializedIndex): void {
+    assert(serialized && serialized.version === 1, "invalid_bm25_serialized_version");
+    this.docs.clear();
+    this.invertedIndex.clear();
+    this.idfCache.clear();
+
+    serialized.docs.forEach(([id, doc]) => this.docs.set(id, doc));
+    serialized.invertedIndex.forEach(([term, postings]) => {
+      this.invertedIndex.set(term, new Map(postings));
+    });
+
+    this.avgdl = serialized.avgdl;
+    this.docCount = serialized.docCount;
+  }
+
+  /**
+   * 静态工厂方法：从序列化索引数据瞬时重建完全等价的 BM25Engine 实例
+   */
+  public static fromIndex(serialized: BM25SerializedIndex): BM25Engine {
+    const engine = new BM25Engine(serialized.k1, serialized.b);
+    engine.importIndex(serialized);
+    return engine;
   }
 }

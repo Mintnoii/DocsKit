@@ -15,7 +15,7 @@ flowchart TD
         HashOp["hash: 抹平换行符 SHA-256 计算与 0-Token 幂等检查"]
         PatchOp["patch: 章节 AST 差量对账与已删接口废弃警告注入"]
         SnapshotOp["snapshot: 快照路径、版本对账与墓碑防重"]
-        SenseOp["sense: BM25 精确搜索 + 本地 ONNX Late Chunking 局部高精向量"]
+        SenseOp["sense: BM25 稀疏检索(可序列化持久化) + 本地 ONNX Late Chunking 局部高精向量 + Rerank 缓存"]
         GraphOp["graph: 双向双链图谱抽取 (Outbound + Backlinks)"]
         LintOp["lint: 全库死链巡检、过期文档提醒、演化链与身份一致性"]
         EvidenceOp["evidence: 段落锚点、证据选段与声明句覆盖校验"]
