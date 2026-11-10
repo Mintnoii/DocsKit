@@ -16,6 +16,7 @@
     "node": ">=20"
   },
   "type": "module",
+  "sideEffects": false,
   "files": [
     "dist"
   ],
@@ -32,6 +33,7 @@
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./package.json": "./package.json",
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
@@ -72,9 +74,21 @@
       "types": "./dist/jit/index.d.ts",
       "import": "./dist/jit/index.js"
     },
-    "./shared": {
-      "types": "./dist/shared/index.d.ts",
-      "import": "./dist/shared/index.js"
+    "./markdown": {
+      "types": "./dist/markdown/index.d.ts",
+      "import": "./dist/markdown/index.js"
+    },
+    "./numeric": {
+      "types": "./dist/numeric/index.d.ts",
+      "import": "./dist/numeric/index.js"
+    },
+    "./evidence": {
+      "types": "./dist/evidence/index.d.ts",
+      "import": "./dist/evidence/index.js"
+    },
+    "./presets": {
+      "types": "./dist/presets/index.d.ts",
+      "import": "./dist/presets/index.js"
     },
     "./pipeline": {
       "types": "./dist/pipeline/index.d.ts",

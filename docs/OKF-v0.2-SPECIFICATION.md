@@ -1,22 +1,22 @@
 # OKF v0.2 (Open Knowledge Framework) 规范卡片契约手册
 
-> 📚 **OKF (Open Knowledge Framework)**：Bebop 全机知识库（Ghost 个人第二大脑 + TeamWiki 团队知识中枢）统一遵守的**原子卡片结构标准**。  
+> 📚 **OKF (Open Knowledge Framework)**：DocsKit 内置的原子卡片结构基线，字段 Schema 与生成函数收敛在 `docskit/okf`。下游可在这份基线上扩字段，边界见文末。  
 > 核心目标：**格式统一、机器可读、零中心账本、供 AI 与人类高效消费。**
 
 ---
 
-## 一、 为什么必须制定 OKF 规范？（解决什么痛点）
+## 为什么要有卡片契约
 
 传统个人笔记或团队 Wiki 最容易陷入三大混乱：
 1. **格式群魔乱舞**：有的写成了长篇流水账，有的只有几句话，AI 检索时无法确定哪里是结论、哪里是代码；
 2. **缺乏检索元数据**：AI 想要快速了解文章大意，被迫把几千字全部读完，极度浪费 Token；
 3. **引用关系断裂**：卡片孤立存在，无法自动生成网状知识图谱，修改底层代码时不知道会影响谁。
 
-**OKF v0.2 就是给知识卡片制定的一套“类代码契约”**。所有编译生成的卡片（`wiki/learning/*.md`）必须严格遵守这套契约。
+**OKF v0.2 就是给知识卡片制定的一套“类代码契约”**。`docskit/okf` 的 Schema 与生成函数按这套基线实现，下游扩出的字段另按各项目的 Schema 校验。
 
 ---
 
-## 二、 OKF v0.2 完整卡片模板结构
+## 完整卡片模板
 
 一张标准的 OKF v0.2 原子卡片由两部分组成：**头部 Frontmatter（机器元数据）** + **正文 Body（黄金结构化正文）**。
 
@@ -73,7 +73,7 @@ export function executeCoreWorkflow() {
 
 ---
 
-## 三、 OKF v0.2 元数据字段详解（Frontmatter Schema）
+## 元数据字段
 
 | 字段名 | 允许的取值 | 含义与白话解释 | 谁来消费？ |
 | :--- | :--- | :--- | :--- |
@@ -90,9 +90,22 @@ export function executeCoreWorkflow() {
 | **`lock`** *(可选)* | `human` | **人工锁定标记**。技术负责人认定的铁律军规加上此标记后，AI 自动化脚本绝对禁止覆写。 | 编译安全门禁 (`lock.ts`) |
 | **`content_hash`** | SHA-256 字符串 | 正文纯文本哈希值。用于再次同步时比对，未变动直接 0-Token 拦截。 | 幂等防抖门禁 (`hash.ts`) |
 
+`docskit/okf` 里与这份契约对得上的导出如下。
+
+| 函数 / Schema | 作用 |
+| :--- | :--- |
+| `OKFFrontmatterSchema`、`OKFConceptFrontmatterSchema`、`OKFSourceFrontmatterSchema`、`OKFCheatsheetFrontmatterSchema`、`OKFDomainFrontmatterSchema`、`OKFEntityFrontmatterSchema` | 按卡片体裁声明字段与枚举 |
+| `OKFStatusSchema`、`OKFConfidenceSchema`、`OKFSourceItemSchema` | 状态、置信度与信源条目的子契约 |
+| `createOKFMetadata`、`createOKFConceptMetadata` | 由输入组装合规 Frontmatter |
+| `updateOKFMetadata` | 在旧元数据上做定向更新 |
+| `validateOKFMetadata` | 落盘前强契约校验 |
+| `buildOKFConceptCard`、`appendCardAttachments` | 生成概念卡正文与附件留痕 |
+
+Frontmatter 的读写由 `docskit/markdown` 的 `parseMarkdownSafely` 与 `stringifyMarkdownSafely` 承担，`okf` 只管字段契约与校验，两处不重复实现。
+
 ---
 
-## 四、 正文建模核心规范：为什么首选 IPO 模型？
+## IPO 正文骨架
 
 OKF v0.2 强烈推荐 **IPO 模型（Input-Process-Output）** 作为架构与技术类卡片的骨架，它分为 4 个标准章节：
 
@@ -107,7 +120,7 @@ OKF v0.2 强烈推荐 **IPO 模型（Input-Process-Output）** 作为架构与�
 
 ---
 
-## 五、 OKF v0.2 与底层技术工具（如 MDAST / Late Chunking）的关系
+## 与底层函数的关系
 
 ```text
                ┌────────────────────────────────────────────────────────┐
@@ -126,5 +139,18 @@ OKF v0.2 强烈推荐 **IPO 模型（Input-Process-Output）** 作为架构与�
      └────────────────────────────────────┘ └────────────────────────────────────┘
 ```
 
-- **OKF v0.2 是“标准法律”**：不管底层用 Node.js 还是 Rust，不管是用正则切还是 AST 切，产物必须百分之百符合 OKF v0.2 的 YAML 和章节规范；
+- **OKF v0.2 定的是产物基线**：不管底层用 Node.js 还是 Rust，不管是用正则切还是 AST 切，产物先满足这套 YAML 与章节规范，下游扩展字段另算；
 - **MDAST 是“精密施工工具”**：我们引入 MDAST 纯粹是为了更稳健、更安全地生产出符合 OKF v0.2 标准的卡片。
+
+---
+
+## 下游扩展边界
+
+这份文档写的是 `docskit/okf` 实际产出的通用基线。两个消费方在这份基线上各有扩展，扩展部分由各自项目的 Schema 与巡检命令承担，通用引擎不写死业务治理语义。
+
+| 消费方 | 扩展内容 | 落点 |
+| :--- | :--- | :--- |
+| Ghost | 沿用 OKF v0.2，另加 `title === stem` 身份不变量与可读标题规范化 | `lint/rules.ts`、`compile/builder.ts` |
+| TeamWiki | 扩到 OKF v0.3，加段落级来源锚点 `{anchor, hash, quote, claim}`、`owner` / `reviewer` / `reviewed_at` / `conflict` / `superseded_by` / `source_ref` / `source_file`，底座元数据补 `source_kind` / `anchor_scheme` / `content_sha256` | `src/compile/contract.ts`、`src/compile/anchors.ts`、`src/lint/` |
+
+段落切分与指纹复算、声明句词级覆盖、演化链审计、同名并存路径仲裁、标题规范化与身份巡检这几类确定性函数已收进 DocsKit，分别在 `docskit/evidence`、`docskit/lint`、`docskit/snapshot`、`docskit/markdown` 与 `docskit/hash`。下游改 import 属于下一阶段，字段形状与治理语义仍由各项目自己持有。渲染与诊断文案已移到 `docskit/presets`，这份规范只描述字段形状，不持有任何业务模板。接法见 `docs/BUILDING-VAULTS.md` 的「注入业务文案」。

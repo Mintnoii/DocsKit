@@ -24,17 +24,15 @@ pnpm build
 
 产物在 `dist/`，ESM 与 `.d.ts` 同时产出。项目只发 ESM，包管理器统一用 pnpm。发布到 npm 后可改为 `pnpm add docskit`。
 
-在仓库内试跑下面的示例时，把 `from "docskit"` 换成 `from "./src/index.ts"`。`tests/vault-recipes.test.ts` 就是这么引用源码的。
+示例按发布包的子路径写。源码按层放在 `src/foundation/` 与 `src/layers/` 下，物理路径与子路径的映射见 `AGENTS.md` 目录结构，`package.json exports` 的十四个子路径保持按能力命名不变。`tests/vault-recipes.test.ts` 属于一次性脚本入口，从 `../src/index` 根 barrel 引入，按 `AGENTS.md` 属豁免范围。
 
 ## 快速开始
 
 ```ts
-import {
-  buildSnapshotPath,
-  isProtectedPath,
-  checkContentIdempotency,
-  runPipeline,
-} from "docskit";
+import { buildSnapshotPath } from "docskit/snapshot";
+import { isProtectedPath } from "docskit/lint";
+import { checkContentIdempotency } from "docskit/hash";
+import { runPipeline } from "docskit/pipeline";
 
 const raw = `## 背景
 首屏渲染慢。
@@ -66,16 +64,22 @@ if (!gate.shouldSkip) {
 
 ## 能力一览
 
+十四个能力子路径与 `package.json exports`、`tsup.config.ts` entry 一一对账，外加一个 `./package.json` 元入口。每个函数只有一个权威子路径，能力模块不再重导出别处的符号。
+
 | 子路径 | 关键函数 | 职责 |
 | :--- | :--- | :--- |
-| `docskit/shared` | `parseMarkdownSafely`、`renderMarkdownTable`、`computeTextNgramSimilarity` | 全库唯一的 Frontmatter、排版与文本相似度底座 |
-| `docskit/ast` | `normalizeMarkdownContent`、`parseMarkdownWithAST`、`createOKFMetadata`、`getMarkdownFiles` | 语法树清洗、章节切分、OKF v0.2 元数据、极速文件扫描 |
-| `docskit/patch` | `diffDocumentSections`、`applySectionPatch`、`evaluateDedupGate` | 章节差量对账、废弃声明注入、四级级联去重 |
-| `docskit/snapshot` | `buildSnapshotPath`、`isVersionNewer`、`isTombstoneHit` | 快照路径、版本对账、低质素材特征防重 |
-| `docskit/sense` | `BM25Engine`、`computeLateChunking`、`rrfFuseScores`、`executeHybridRankPipeline` | 词项精确检索、章节级向量、多路召回融合与重排 |
-| `docskit/graph` | `extractWikilinks`、`indexBidirectionalGraph` | 双链提取与双向 1-Hop 拓扑图 |
-| `docskit/lint` | `lintVaultTopology`、`auditDirectoryVault`、`isProtectedPath`、`analyzeCardLifecycle` | 断链与 Schema 巡检、只读底座守护、过期卡片与重复卡片排查 |
-| `docskit/hash` | `computeMarkdownBodyHash`、`checkContentIdempotency` | 剥离 Frontmatter 的正文指纹与 0-Token 幂等短路 |
+| `docskit/markdown` | `parseMarkdownSafely`、`stringifyMarkdownSafely`、`renderMarkdownTable`、`outdent`、`normalizeReadableTitle`、`collapseWhitespace`、`splitLines`、`stripMarkdownExtension` | 全库唯一的 Frontmatter、排版与章节函数底座 |
+| `docskit/numeric` | `cosineSimilarityVectors`、`computeTextNgramSimilarity`、`computeBigramDiceSimilarity`、`normalizeVector` | 全库唯一的字符相似度与向量数值实现 |
+| `docskit/ast` | `normalizeMarkdownContent`、`parseMarkdownWithAST`、`distillMarkdownContent`、`getMarkdownFiles` | 语法树解析、内容清洗、核心提炼、文件扫描 |
+| `docskit/okf` | `createOKFMetadata`、`validateOKFMetadata`、`buildOKFConceptCard`、`OKFFrontmatterSchema` | 卡片 Frontmatter 契约、校验、生成与附件组装 |
+| `docskit/patch` | `diffDocumentSections`、`applySectionPatch`、`evaluateDedupGate`、`findMostSimilarVector` | 章节差量对账、废弃声明注入、四级级联去重 |
+| `docskit/snapshot` | `buildSnapshotPath`、`parseSnapshotMeta`、`isVersionNewer`、`sanitizeFileName`、`isTombstoneHit`、`resolveCardPathCollision` | 快照路径、版本对账、文件名清洗、低质素材特征防重 |
+| `docskit/sense` | `BM25Engine`、`computeLateChunking`、`rrfFuseScores`、`executeHybridRankPipeline`、`createReranker`、`rankDocumentsByNgramVector` | 词项精确检索、章节级向量、多路召回融合与重排 |
+| `docskit/graph` | `extractWikilinks`、`extractWikiOutboundLinks`、`indexBidirectionalGraph`、`normalizeWikilinkTarget`、`stripAnchor`、`stripAlias` | 双链提取、目标归一与双向 1-Hop 拓扑图 |
+| `docskit/lint` | `lintVaultTopology`、`auditDirectoryVault`、`isProtectedPath`、`evaluateToolCallPathGuard`、`analyzeCardLifecycle`、`findHighSimilarityCardPairs`、`auditSupersedeChain`、`checkTitleStemConsistency` | 断链与 Schema 巡检、只读底座守护、过期卡片与重复卡片排查 |
+| `docskit/hash` | `computeMarkdownBodyHash`、`calcRawContentSha256`、`checkContentIdempotency`、`computeShortHash`、`computeSha256Hex` | 纯正文指纹、素材哈希与 0-Token 幂等短路 |
+| `docskit/evidence` | `splitAnchorableParagraphs`、`buildSourceRefs`、`verifySourceRef`、`checkClaimCoverage`、`mechanicalClaim` | 段落级证据锚点、确定性选段与指纹复算、声明句覆盖校验 |
+| `docskit/presets` | `ZH_CN_DISTILL_OPTIONS`、`ZH_CN_NORMALIZE_TEXTS`、`ZH_CN_JIT_RENDERER`、`ZH_CN_SECTION_TEXTS`、`ZH_CN_LABELS` | 五个聚合入口，卡片模板、附件清单、提示词和废弃声明一次注入 |
 | `docskit/jit` | `formatAgentJITPrompt` | 面向 Coding Agent 的渐进式上下文装配 |
 | `docskit/pipeline` | `runPipeline` | 清洗、门禁、编译、元数据组装四阶段编排 |
 
@@ -85,15 +89,44 @@ if (!gate.shouldSkip) {
 
 两条链路用的是同一批函数，差别集中在 `compileMode`、版本判定、删除处理与元数据来源。`docs/BUILDING-VAULTS.md` 给出两份完整可运行的配方、差异对照表和交付前自检清单。
 
+## 下游契约怎么扩
+
+`docskit/okf` 提供 OKF v0.2 的通用字段基线，下游在这份基线上扩自己的字段，引擎不写死业务治理语义。TeamWiki 已扩到 OKF v0.3，多了段落级来源锚点、声明句、责任链与演化链字段；Ghost 另加 `title === stem` 的身份不变量。这些扩展由各项目自己的 Schema 与巡检命令承担，边界与字段清单见 `docs/OKF-v0.2-SPECIFICATION.md` 末节。
+
+五类确定性计算已经收进通用引擎。证据链在 `docskit/evidence`，演化链与身份巡检在 `docskit/lint`，路径仲裁在 `docskit/snapshot`，标题规范化在 `docskit/markdown`，短哈希在 `docskit/hash`。字段形状、模型判定、台账与签字命令仍留在业务层，配方接法见 `docs/BUILDING-VAULTS.md`。
+
+## 引擎纯度与业务预设
+
+`src/contracts/`、`src/foundation/` 与 `src/layers/` 下的方法体不写业务语言。渲染类函数默认输出只由输入数据组成的结构骨架，诊断类返回值默认给结构化 code，阈值与权重集中在 `src/contracts/policy.ts` 的冻结表。原中文卡片模板、附件附录、JIT 提示词与废弃声明全部收在 `docskit/presets`，调用方按需注入。
+
+```ts
+import { distillMarkdownContent } from "docskit/ast";
+import { ZH_CN_DISTILL_OPTIONS } from "docskit/presets";
+import { runPipeline } from "docskit/pipeline";
+
+const card = distillMarkdownContent(raw, title, ZH_CN_DISTILL_OPTIONS);
+const result = await runPipeline(raw, {
+  title,
+  compileMode: "distill",
+  texts: { distill: ZH_CN_DISTILL_OPTIONS },
+});
+```
+
+不注入时输出是中性结构，注入后得到这套中文模板，和旧版快照不再逐字相同。纯计算类函数（哈希、相似度、段落锚点、路径仲裁、演化链判定）无论是否注入，结果都不变。策略数值可以逐项覆盖，默认值见 `src/contracts/policy.ts`。
+
 ## 设计约束
 
 这些约束约束的是内核本身，业务层可以自由组合。
 
 - 内核不写死任何具体工程名或目录名，需要过滤时由调用方通过参数传入。
 - Frontmatter 读写、表格排版、字符相似度各只有一份实现，业务模块只消费不重写。
-- `src/core/` 全部是无状态纯函数，可单独 import；`src/pipeline/` 才负责按配置编排。
+- `src/contracts/`、`src/foundation/` 与 `src/layers/` 全部是无状态纯函数，可单独 import；`src/layers/compile/pipeline/` 才负责按配置编排。
 - 元数据里的评估字段由上游模型显式给定，代码不写死默认值。
 - 公开子路径与构建 entry 一一对账，新增函数只需在所属模块导出一次。
+- 消费方按 `docskit/<子路径>` 导入，根 barrel 只留给一次性脚本与工具入口，每个符号只有一个权威子路径。
+- 包标记 `sideEffects: false`，`exports` 显式带 `./package.json`，打包器可安全剪枝。
+- `src/contracts/`、`src/foundation/` 与 `src/layers/` 零业务中文，模板与诊断句子走 `docskit/presets` 注入。
+- 策略数值只在 `contracts/policy.ts` 声明，方法体不写字面量默认值。
 
 ## 开发
 
@@ -109,7 +142,7 @@ pnpm build       # tsup 产出 ESM 与声明文件
 
 - [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) 能力与四阶段分层
 - [`docs/BUILDING-VAULTS.md`](docs/BUILDING-VAULTS.md) 用 DocsKit 搭建知识库的可运行配方
-- [`docs/OKF-v0.2-SPECIFICATION.md`](docs/OKF-v0.2-SPECIFICATION.md) 卡片元数据与正文契约
+- [`docs/OKF-v0.2-SPECIFICATION.md`](docs/OKF-v0.2-SPECIFICATION.md) 通用卡片契约与下游扩展边界
 - [`AGENTS.md`](AGENTS.md) 跨 Agent 工程契约
 
 ## 许可证

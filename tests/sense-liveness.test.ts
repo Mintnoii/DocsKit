@@ -77,7 +77,7 @@ describe("Rerank 供给链活性防线", () => {
       { id: "b", text: "微前端" },
     ]);
     assert.equal(output.applied, false);
-    assert.match(output.fallbackReason ?? "", /SILICONFLOW_API_KEY/);
+    assert.match(output.fallbackReason ?? "", /siliconflow_api_key_missing/);
     assert.deepEqual(
       output.results.map((item) => item.id),
       ["a", "b"],

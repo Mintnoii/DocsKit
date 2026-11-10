@@ -1,4 +1,5 @@
 import { describe, it } from "node:test";
+import { ZH_CN_DISTILL_OPTIONS, ZH_CN_NORMALIZE_TEXTS, ZH_CN_SECTION_TEXTS, ZH_CN_JIT_RENDERER, ZH_CN_LABELS } from "../src/presets/index";
 import assert from "node:assert/strict";
 import {
   buildSnapshotPath,
@@ -37,6 +38,7 @@ async function buildPersonalCard(
     compileMode: "distill",
     modeling: "ipo",
     metadata: { defaultValues: { type: "concept" } },
+    texts: { distill: ZH_CN_DISTILL_OPTIONS, normalize: ZH_CN_NORMALIZE_TEXTS, section: ZH_CN_SECTION_TEXTS },
   });
   return result.fullMarkdown;
 }
@@ -52,6 +54,7 @@ async function buildTeamCard(incoming: string, existing: string | undefined, tit
     existingContent: existing,
     features: { deprecationNotice: true },
     gates: { humanLock: true },
+    texts: { section: ZH_CN_SECTION_TEXTS },
   });
 
   const graph = indexBidirectionalGraph([
@@ -61,7 +64,7 @@ async function buildTeamCard(incoming: string, existing: string | undefined, tit
   const jit = formatAgentJITPrompt(
     `修改 ${title}`,
     [{ title, summary: "方案主干", filePath: `wiki/${snapshot.category}/${title}.md` }],
-    { mode: "compact" }
+    { mode: "compact", render: ZH_CN_JIT_RENDERER, vaultName: ZH_CN_LABELS.vaultName }
   );
 
   return { fullMarkdown: result.fullMarkdown, graph, prompt: jit.prompt, action: result.action };
@@ -74,7 +77,7 @@ describe("构建指南配方可运行性", () => {
 
     assert.ok(card);
     assert.match(card, /^---/);
-    assert.match(card, /建模范式/);
+    assert.match(card, /单步机制/);
 
     const unchanged = new Set<string>();
     const hash = (await import("../src/index")).computeMarkdownBodyHash(raw)!;
@@ -97,7 +100,7 @@ created: 2026-01-01
     assert.ok(built);
     assert.match(built.fullMarkdown, /created: 2026-01-01/);
     assert.match(built.fullMarkdown, /deprecation_warning:/);
-    assert.match(built.prompt, /核心架构约束对账/);
+    assert.match(built.prompt, /先看这几张卡/);
     assert.equal(built.graph.size, 2);
   });
 

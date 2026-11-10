@@ -1,3 +1,4 @@
+import { ZH_CN_NORMALIZE_TEXTS } from "../src/presets/index";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -82,16 +83,16 @@ tags: [new]
 点击此处下载配置文件：[配置包.zip](https://internal.storage.com/files/config.zip)。
 另有说明文档：[技术方案.pdf](https://internal.storage.com/docs/spec.pdf)。
 `;
-      const result = normalizeMarkdownContent(raw);
+      const result = normalizeMarkdownContent(raw, { texts: ZH_CN_NORMALIZE_TEXTS });
 
       assert.equal(result.attachments.length, 2);
       assert.equal(result.attachments[0].name, "配置包.zip");
       assert.equal(result.attachments[0].ext, "zip");
       assert.equal(result.attachments[1].name, "技术方案.pdf");
 
-      assert.ok(result.cleanContent.includes("📎 **[附件资产: 配置包.zip]**"));
-      assert.ok(result.cleanContent.includes("### 📦 外部附件与关联资产清单"));
-      assert.ok(result.cleanContent.includes("| 1 | `配置包.zip` | `.zip` | [原始下载链接](https://internal.storage.com/files/config.zip) |"));
+      assert.ok(result.cleanContent.includes("📎 附件 配置包.zip"));
+      assert.ok(result.cleanContent.includes("### 附件"));
+      assert.ok(result.cleanContent.includes("| 1 | `配置包.zip` | `.zip` | [下载](https://internal.storage.com/files/config.zip) |"));
     });
 
     it("应通过 unist-util-select 准确统计 Mermaid、代码块与表格", () => {

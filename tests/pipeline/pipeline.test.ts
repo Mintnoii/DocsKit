@@ -1,4 +1,5 @@
 import { describe, it } from "node:test";
+import { ZH_CN_DISTILL_OPTIONS, ZH_CN_SECTION_TEXTS } from "../../src/presets/index";
 import assert from "node:assert/strict";
 import {
   runPipeline,
@@ -38,6 +39,7 @@ title: 服务端渲染方案
       features: {
         deprecationNotice: true,
       },
+      texts: { section: ZH_CN_SECTION_TEXTS },
     });
 
     assert.equal(res.action, "PATCHED");
@@ -45,7 +47,7 @@ title: 服务端渲染方案
     assert.ok(res.content.includes("首屏渲染较慢，且 TTFB 过长"));
     assert.ok(res.content.includes("3. 新渲染管线"));
     // 旧接口在 incoming 中未出现，启用 deprecationNotice 时应保留并注入废弃警示声明
-    assert.ok(res.content.includes("废弃声明"));
+    assert.ok(res.content.includes("这段已废弃"));
     assert.ok(res.content.includes("[!WARNING]"));
   });
 
@@ -72,10 +74,11 @@ export function loop() {
       title: "Prefix Caching 原理",
       compileMode: "distill",
       modeling: "ipo",
+      texts: { distill: ZH_CN_DISTILL_OPTIONS },
     });
     assert.equal(resIpo.action, "DISTILLED");
-    assert.ok(resIpo.content.includes("形态 A · 纯 IPO 机制模型"));
-    assert.ok(resIpo.content.includes("核心架构契约与设计范式"));
+    assert.ok(resIpo.content.includes("单步机制"));
+    assert.ok(resIpo.content.includes("这张卡怎么运作"));
     assert.equal(resIpo.frontmatter.modeling, "ipo");
 
     // 2. 测试 Decomposition 分解工序建模
@@ -83,10 +86,11 @@ export function loop() {
       title: "Agent 上下文治理",
       compileMode: "distill",
       modeling: "decomposition",
+      texts: { distill: ZH_CN_DISTILL_OPTIONS },
     });
     assert.equal(resDecomp.action, "DISTILLED");
-    assert.ok(resDecomp.content.includes("形态 B · 纯分解工序模型"));
-    assert.ok(resDecomp.content.includes("多阶段生命周期工序分解"));
+    assert.ok(resDecomp.content.includes("按步骤拆开讲"));
+    assert.ok(resDecomp.content.includes("分几步做"));
     assert.equal(resDecomp.frontmatter.modeling, "decomposition");
 
     // 3. 测试 Hybrid 混合架构建模
@@ -94,10 +98,11 @@ export function loop() {
       title: "Agent Loop 控制循环机制",
       compileMode: "distill",
       modeling: "hybrid",
+      texts: { distill: ZH_CN_DISTILL_OPTIONS },
     });
     assert.equal(resHybrid.action, "DISTILLED");
-    assert.ok(resHybrid.content.includes("形态 C · 混合建模架构"));
-    assert.ok(resHybrid.content.includes("全局宏观 IPO 契约与内层工序解构"));
+    assert.ok(resHybrid.content.includes("先说整体输入输出"));
+    assert.ok(resHybrid.content.includes("整体与分步"));
     assert.equal(resHybrid.frontmatter.modeling, "hybrid");
   });
 
